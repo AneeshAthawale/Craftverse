@@ -1,7 +1,8 @@
+import React from 'react';
+import RLGL from './pages/RLGL';
+
 function App() {
-  return (
-    <h1>Welcome to CraftVerse</h1>
-  );
+  return <RLGL />;
 }
 
 export default App;
