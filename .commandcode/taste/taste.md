@@ -1,0 +1,4 @@
+- Prefers removing dead/unused code — including supporting state/logic for features already visually removed or commented out (e.g. cleaning up "removed as requested" code). Confidence: 0.9
+- Prefers adding clean placeholder content to stub/incomplete files (pages, layout, reusable UI components) so they are ready to be built on, rather than leaving them empty or mislabeled. Confidence: 0.8
+- Prefers new code to match existing codebase conventions (React functional components with named exports, className hooks into existing styles). Confidence: 0.7
+- Verifies the build compiles cleanly after making changes before reporting done. Confidence: 0.7

@@ -10,7 +10,7 @@ const DOMAINS = [
 ];
 
 const PROBLEMS = [
-  {
+{
     id: 'easy_1',
     title: '1. Cyber String Decryptor (Reverse Words)',
     domain: 'CYBERSECURITY',
@@ -54,16 +54,6 @@ const PROBLEMS = [
   }
 ];
 
-// --- INITIAL COMPETITOR TEAMS ---
-const INITIAL_RIVALS = [
-  { id: '456', name: 'Team 456 (Your Team)', isPlayer: true, status: 'CODING', progress: 0 },
-  { id: '001', name: 'Team Alpha (PCCOER)', isPlayer: false, status: 'CODING', progress: 15 },
-  { id: '218', name: 'Team CyberKnight', isPlayer: false, status: 'CODING', progress: 25 },
-  { id: '067', name: 'Team Phoenix Devs', isPlayer: false, status: 'CODING', progress: 20 },
-  { id: '101', name: 'Team Byte Busters', isPlayer: false, status: 'CODING', progress: 10 },
-  { id: '199', name: 'Team Quantum Craft', isPlayer: false, status: 'CODING', progress: 18 }
-];
-
 export default function RLGL() {
   const [gameState, setGameState] = useState('PRE_GAME'); // PRE_GAME | GREEN_LIGHT | RED_LIGHT | DISQUALIFIED | VICTORY
   const [selectedProblemIdx, setSelectedProblemIdx] = useState(0);
@@ -71,7 +61,6 @@ export default function RLGL() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [totalRoundTimer, setTotalRoundTimer] = useState(180); // 3 minutes total
   const [prizePool, setPrizePool] = useState(60000); // ₹60,000+
-  const [rivals, setRivals] = useState(INITIAL_RIVALS);
   const [testResults, setTestResults] = useState([]);
   const [disqualifyReason, setDisqualifyReason] = useState('');
   const [podium, setPodium] = useState([]);
@@ -222,17 +211,6 @@ export default function RLGL() {
           setIsCountdownActive(false);
           setGameState(nextState);
           playSynthSound(nextState === 'RED_LIGHT' ? 'RED' : 'GREEN');
-
-          // If switching to RED_LIGHT, check if any AI bots get eliminated!
-          if (nextState === 'RED_LIGHT') {
-            setRivals(prevRivals => prevRivals.map(r => {
-              if (r.isPlayer || r.status !== 'CODING') return r;
-              if (Math.random() < 0.2) {
-                return { ...r, status: 'ELIMINATED' };
-              }
-              return r;
-            }));
-          }
           return 0;
         } else {
           playSynthSound('BEEP_3');
@@ -264,13 +242,12 @@ export default function RLGL() {
     setGameState('GREEN_LIGHT');
     setIsCountdownActive(false);
     setTotalRoundTimer(180);
-    setRivals(INITIAL_RIVALS.map(r => ({ ...r, status: 'CODING', progress: 0 })));
     setTestResults([]);
     setDisqualifyReason('');
     playSynthSound('GREEN');
   };
 
-  // --- TOTAL ROUND countdown & Bot coding progress ---
+  // --- TOTAL ROUND countdown ---
   useEffect(() => {
     if (gameState !== 'GREEN_LIGHT' && gameState !== 'RED_LIGHT') return;
 
@@ -284,19 +261,10 @@ export default function RLGL() {
         }
         return prev - 1;
       });
-
-      if (gameState === 'GREEN_LIGHT' && !isCountdownActive) {
-        setRivals(prevRivals => prevRivals.map(r => {
-          if (r.isPlayer || r.status !== 'CODING') return r;
-          const addProgress = Math.floor(Math.random() * 5) + 3;
-          const newProgress = Math.min(100, r.progress + addProgress);
-          return { ...r, progress: newProgress, status: newProgress >= 100 ? 'FINISHED' : 'CODING' };
-        }));
-      }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [gameState, isCountdownActive]);
+  }, [gameState]);
 
   // --- CODE EXECUTION & TEST RUNNER ---
   const handleRunTests = () => {
@@ -360,13 +328,8 @@ export default function RLGL() {
     }
   };
 
-  const aliveCount = rivals.filter(r => r.status !== 'ELIMINATED').length;
-
   return (
     <div className={`rlgl-container state-${gameState}`}>
-      {/* --- HACKATHON OFFICIAL HEADER BAR --- */}
-      {/* Header removed as requested */}
-
       {/* --- DOMAINS BANNER --- */}
       <div className="domain-banner">
         <div className="round-badge">ROUND 2: OFFLINE NIGHT SURVIVAL & DEBUGGING SESSION</div>
@@ -541,8 +504,6 @@ export default function RLGL() {
               </div>
             )}
           </div>
-
-          {/* Rivals Card removed as requested */}
         </div>
       </div>
 

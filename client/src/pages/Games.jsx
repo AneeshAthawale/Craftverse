@@ -1,5 +1,10 @@
-function Home() {
-  return <h1>Home Page</h1>;
-}
+import React from 'react';
 
-export default Home;
+export default function Games() {
+  return (
+    <div className="games-page">
+      <h1>Games</h1>
+      <p>Browse hackathon games and challenges here.</p>
+    </div>
+  );
+}
