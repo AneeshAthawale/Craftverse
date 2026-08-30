@@ -55,6 +55,7 @@ const PROBLEMS = [
 ];
 
 export default function RLGL() {
+  const [teamName] = useState(() => `Team ${Math.floor(Math.random() * 9000) + 1000}`);
   const [gameState, setGameState] = useState('PRE_GAME'); // PRE_GAME | GREEN_LIGHT | RED_LIGHT | DISQUALIFIED | VICTORY
   const [selectedProblemIdx, setSelectedProblemIdx] = useState(0);
   const [userCode, setUserCode] = useState(PROBLEMS[0].starterCode);
@@ -148,6 +149,7 @@ export default function RLGL() {
     channelRef.current.postMessage({
       type: 'STATE_SYNC',
       payload: {
+        teamName,
         gameState,
         isCountdownActive,
         countdownVal,
@@ -155,7 +157,7 @@ export default function RLGL() {
         totalRoundTimer
       }
     });
-  }, [gameState, isCountdownActive, countdownVal, nextState, totalRoundTimer]);
+  }, [gameState, isCountdownActive, countdownVal, nextState, totalRoundTimer, teamName]);
 
   // Listen for commands from Admin
   useEffect(() => {
@@ -180,10 +182,17 @@ export default function RLGL() {
         setGameState('DISQUALIFIED');
         setDisqualifyReason('DISQUALIFIED! Admin manually issued team disqualification penalty.');
         playSynthSound('ELIMINATED');
+      } else if (type === 'DISQUALIFY_SPECIFIC_TEAM') {
+        if (event.data.payload && event.data.payload.teamName === teamName) {
+          setGameState('DISQUALIFIED');
+          setDisqualifyReason('DISQUALIFIED! Admin manually disqualified your team.');
+          playSynthSound('ELIMINATED');
+        }
       } else if (type === 'REQUEST_SYNC') {
          channelRef.current.postMessage({
           type: 'STATE_SYNC',
           payload: {
+            teamName,
             gameState,
             isCountdownActive,
             countdownVal,
@@ -198,7 +207,7 @@ export default function RLGL() {
     return () => {
       channelRef.current.removeEventListener('message', handleMessage);
     };
-  }, [isCountdownActive]); // Removed playSynthSound from dep array, kept isCountdownActive as it's checked
+  }, [isCountdownActive, teamName]);
 
   // Countdown timer effect when Admin triggers state change
   useEffect(() => {

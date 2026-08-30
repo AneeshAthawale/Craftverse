@@ -2,3 +2,6 @@
 - Prefers adding clean placeholder content to stub/incomplete files (pages, layout, reusable UI components) so they are ready to be built on, rather than leaving them empty or mislabeled. Confidence: 0.8
 - Prefers new code to match existing codebase conventions (React functional components with named exports, className hooks into existing styles). Confidence: 0.7
 - Verifies the build compiles cleanly after making changes before reporting done. Confidence: 0.7
+- When doing a visual redesign/restyle, keeps existing mock/hardcoded data (IDs, statuses, sample values) as-is — restyles and relabels only rather than enriching or changing the data. Confidence: 0.8
+- Prefers avoiding new dependencies/external assets for styling — chooses existing system fonts and CSS-only decoration over adding webfont imports or libraries. Confidence: 0.8
+- Effort/ecosystem note: this machine's shell has `NODE_ENV=production` set, causing `npm install` to skip devDependencies (vite/eslint). Clear it (`set NODE_ENV= &&`) when installing/fixing dev tooling. Confidence: 0.8

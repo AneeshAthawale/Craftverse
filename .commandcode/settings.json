@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(npm:*)",
+      "Shell(dir node_modules 2>&1 | findstr /i \"vite react-qr\" ; echo ===ROOT===; dir C:\\Users\\anees\\CraftVerse\\node_modules 2>&1 | findstr /i \"vite react\" ; echo ===NPMRC===; type .npmrc 2>&1; type C:\\Users\\anees\\CraftVerse\\.npmrc 2>&1; type C:\\Users\\anees\\.npmrc 2>&1)",
+      "Shell(dir:*)",
+      "Shell(type:*)",
+      "Shell(set:*)",
+      "Shell(agent-browser:*)",
+      "Shell(grep:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

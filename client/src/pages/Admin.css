@@ -5,23 +5,28 @@
   color: #fff;
   font-family: 'Inter', sans-serif;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
+  padding: 1rem;
 }
 
-.admin-console-bar.standalone {
-  position: relative;
-  width: 100%;
-  max-width: 800px;
+.dashboard-layout {
+  display: flex;
+  flex-direction: row;
+  gap: 1.5rem;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+/* Sidebar Controls */
+.admin-sidebar {
+  width: 320px;
   background: rgba(12, 14, 20, 0.95);
   border: 2px solid #ff2a70;
   border-radius: 20px;
   box-shadow: 0 0 40px rgba(255, 42, 112, 0.35);
   overflow: hidden;
-  left: 0;
-  transform: none;
-  bottom: auto;
+  flex-shrink: 0;
+  position: sticky;
+  top: 1rem;
 }
 
 .admin-console-header {
@@ -36,22 +41,16 @@
   letter-spacing: 1px;
 }
 
-.connection-status {
-  font-size: 0.8rem;
-}
-.connection-status.connected { color: #00e676; }
-.connection-status.disconnected { color: #ff1744; }
-
 .admin-console-content {
-  padding: 2rem 1.5rem;
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
 }
 
 .admin-status-indicator {
   font-family: 'Orbitron', sans-serif;
-  font-size: 1.1rem;
+  font-size: 1rem;
   color: #e2e8f0;
   display: flex;
   flex-direction: column;
@@ -61,6 +60,7 @@
 .status-row {
   display: flex;
   gap: 10px;
+  align-items: center;
 }
 
 .admin-countdown-badge {
@@ -77,15 +77,13 @@
 
 .btn-admin-toggle {
   border: none;
-  color: #000;
   font-family: 'Orbitron', sans-serif;
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 900;
-  padding: 1rem 1.5rem;
+  padding: 1rem;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
   width: 100%;
 }
 
@@ -115,9 +113,9 @@
   border: 1px solid #ff1744;
   color: #ff1744;
   font-family: 'Orbitron', sans-serif;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 800;
-  padding: 1rem 1.5rem;
+  padding: 1rem;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -131,4 +129,138 @@
 .btn-admin-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.connection-info {
+  margin-top: 0.5rem;
+}
+.connection-status {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.connection-status.connected { color: #00e676; }
+.connection-status.disconnected { color: #ff1744; }
+
+/* Main Dashboard Panel */
+.admin-main-panel {
+  flex-grow: 1;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-height: 80vh;
+}
+
+.dashboard-header h2 {
+  margin: 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 2rem;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.dashboard-header p {
+  margin: 0.5rem 0 0 0;
+  color: #94a3b8;
+  font-size: 1rem;
+}
+
+.teams-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  flex-grow: 1;
+}
+
+.teams-column {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 16px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.teams-column h3 {
+  margin: 0 0 1rem 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1rem;
+  color: #cbd5e1;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 0.5rem;
+}
+
+.teams-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  flex-grow: 1;
+}
+
+.empty-msg {
+  color: #64748b;
+  font-style: italic;
+  font-size: 0.9rem;
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.team-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  transition: transform 0.2s;
+}
+
+.team-card:hover {
+  transform: translateY(-2px);
+}
+
+.active-team {
+  border-left: 4px solid #3b82f6;
+}
+
+.victory-team {
+  border-left: 4px solid #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+}
+
+.disqualified-team {
+  border-left: 4px solid #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  opacity: 0.8;
+}
+
+.team-name {
+  font-family: 'Inter', sans-serif;
+  font-size: 1rem;
+}
+
+.btn-sm-danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid #ef4444;
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  font-family: 'Orbitron', sans-serif;
+  font-weight: bold;
+  transition: all 0.2s;
+}
+
+.btn-sm-danger:hover {
+  background: #ef4444;
+  color: #fff;
 }
