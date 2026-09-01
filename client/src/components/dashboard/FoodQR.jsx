@@ -1,20 +1,31 @@
-import React from 'react';
 import QRCode from 'react-qr-code';
 import { UtensilsCrossed } from 'lucide-react';
 
-export default function FoodQR({ access }) {
-  // Single current food-access entry following the food_access table shape.
-  const current = access ?? {
-    participantId: 'P001',
-    mealType: 'Day 1 · Lunch',
-    eventDay: 1,
-    token: 'cv-food-P001-D1-LUNCH-9f3a2c',
-    status: 'UNUSED'
-  };
+/**
+ * Displays the food token returned by the backend (GET /api/food/me).
+ * The token is ALWAYS backend-generated; never created or validated here.
+ */
+export default function FoodQR({ access, meal }) {
+  // No active meal window or no linked participant -> nothing to show.
+  if (!access || !access.token) {
+    return (
+      <section className="dashboard-section">
+        <div className="section-header">
+          <UtensilsCrossed className="section-icon" size={24} />
+          <h2 className="section-title">Food QR</h2>
+        </div>
+        <p className="available-soon">
+          No food QR is available right now. Your QR appears when a meal break starts.
+        </p>
+      </section>
+    );
+  }
 
-  const isUsed = current.status === 'USED';
-  const isExpired = current.status === 'EXPIRED';
+  const status = access.status || 'UNUSED';
+  const isUsed = status === 'USED';
+  const isExpired = status === 'EXPIRED';
   const unusable = isUsed || isExpired;
+  const participantLabel = `P${String(access.participant_id).padStart(3, '0')}`;
 
   return (
     <section className="dashboard-section">
@@ -32,7 +43,7 @@ export default function FoodQR({ access }) {
             <span className="geo geo-triangle" style={{ color: 'var(--accent)', marginRight: 8 }}></span>
             Food Access
           </span>
-          <span className="food-pass-site">DAY {current.eventDay}</span>
+          <span className="food-pass-site">{meal ?? `DAY ${access.event_day}`}</span>
         </div>
 
         <div className={`food-qr-body ${unusable ? 'food-qr-unusable' : ''}`}>
@@ -43,7 +54,7 @@ export default function FoodQR({ access }) {
               </div>
             ) : (
               <>
-                <QRCode value={current.token} size={148} />
+                <QRCode value={access.token} size={148} />
                 <div className="food-qr-scan-hint">Scan at the food counter</div>
               </>
             )}
@@ -52,18 +63,18 @@ export default function FoodQR({ access }) {
           <div className="food-qr-details">
             <div className="food-qr-row">
               <span className="food-qr-label">Meal</span>
-              <span className="food-qr-value">{current.mealType}</span>
+              <span className="food-qr-value">{meal ?? `${access.meal_type} · Day ${access.event_day}`}</span>
             </div>
             <div className="food-qr-row">
               <span className="food-qr-label">Participant</span>
               <span className="food-qr-value" style={{ fontFamily: 'var(--mono)' }}>
-                {current.participantId}
+                {participantLabel}
               </span>
             </div>
             <div className="food-qr-row">
               <span className="food-qr-label">Status</span>
-              <span className={`food-qr-status ${current.status.toLowerCase()}`}>
-                {current.status}
+              <span className={`food-qr-status ${status.toLowerCase()}`}>
+                {status}
               </span>
             </div>
           </div>

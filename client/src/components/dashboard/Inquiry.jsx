@@ -1,43 +1,51 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { HelpCircle, Send } from 'lucide-react';
+import api from '../../services/api.js';
 
-const INITIAL_INQUIRIES = [
-  {
-    id: 1,
-    title: 'Lunch QR missing',
-    message: 'I have not received my lunch QR.',
-    status: 'IN_PROGRESS',
-    response: 'Regenerating your QR now. Please refresh in a few minutes.',
-    createdAt: '10:12 AM',
-  },
-];
+function formatTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
-export default function Inquiry({ initial }) {
-  const [inquiries, setInquiries] = useState(initial ?? INITIAL_INQUIRIES);
+export default function Inquiry({ initial, onSubmitted }) {
+  const [inquiries, setInquiries] = useState(initial ?? []);
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
-  const [justSent, setJustSent] = useState(false);
+  const [status, setStatus] = useState(''); // '', 'submitting', 'sent', 'error'
+  const [error, setError] = useState('');
 
-  const handleSubmit = (e) => {
+  // Keep in sync if the parent refreshes the list.
+  const [prevInitial, setPrevInitial] = useState(initial);
+  if (initial !== prevInitial) {
+    setPrevInitial(initial);
+    setInquiries(initial ?? []);
+  }
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const trimmedTitle = title.trim();
     const trimmedMessage = message.trim();
-    if (!trimmedTitle || !trimmedMessage) return;
+    if (!trimmedTitle || !trimmedMessage || status === 'submitting') return;
 
-    setInquiries((prev) => [
-      {
-        id: Date.now(),
+    setStatus('submitting');
+    setError('');
+    try {
+      const { inquiry } = await api.post('/inquiries', {
         title: trimmedTitle,
         message: trimmedMessage,
-        status: 'OPEN',
-        createdAt: 'Just now',
-      },
-      ...prev,
-    ]);
-    setTitle('');
-    setMessage('');
-    setJustSent(true);
-    setTimeout(() => setJustSent(false), 2500);
+      });
+      setInquiries((prev) => [inquiry, ...prev]);
+      onSubmitted?.(inquiry);
+      setTitle('');
+      setMessage('');
+      setStatus('sent');
+      setTimeout(() => setStatus(''), 2500);
+    } catch (err) {
+      setStatus('error');
+      setError(err.message || 'Could not submit inquiry');
+    }
   };
 
   return (
@@ -66,23 +74,24 @@ export default function Inquiry({ initial }) {
           value={message}
           onChange={(e) => setMessage(e.target.value)}
         />
-        <button className="inquiry-send-btn" type="submit">
+        <button className="inquiry-send-btn" type="submit" disabled={status === 'submitting'}>
           Transmit Inquiry <Send size={15} />
         </button>
       </form>
 
-      {justSent && (
+      {status === 'sent' && (
         <p className="inquiry-sent-note">Inquiry submitted. Staff will respond shortly.</p>
       )}
+      {status === 'error' && <p className="dash-error">⚠ {error}</p>}
 
-      {inquiries.filter((i) => i.status !== 'OPEN' || true).length > 0 && (
+      {inquiries.length > 0 && (
         <div className="inquiries-list">
           {inquiries.map((item) => (
-            <div key={item.id} className={`inquiry-item inquiry-${item.status.toLowerCase()}`}>
+            <div key={item.inquiry_id ?? item.id} className={`inquiry-item inquiry-${(item.status || 'OPEN').toLowerCase()}`}>
               <div className="inquiry-item-header">
                 <h4 className="inquiry-item-title">{item.title}</h4>
-                <span className={`inquiry-status ${item.status.toLowerCase()}`}>
-                  {item.status === 'IN_PROGRESS' ? 'IN PROGRESS' : item.status}
+                <span className={`inquiry-status ${(item.status || 'OPEN').toLowerCase()}`}>
+                  {item.status === 'IN_PROGRESS' ? 'IN PROGRESS' : item.status || 'OPEN'}
                 </span>
               </div>
               <p className="inquiry-item-message">{item.message}</p>
@@ -91,8 +100,8 @@ export default function Inquiry({ initial }) {
                   <span className="inquiry-response-label">Staff:</span> {item.response}
                 </div>
               )}
-              {item.createdAt && (
-                <div className="inquiry-item-time">{item.createdAt}</div>
+              {item.created_at && (
+                <div className="inquiry-item-time">{formatTime(item.created_at)}</div>
               )}
             </div>
           ))}

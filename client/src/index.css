@@ -107,3 +107,141 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* ---------------------------------------------------------------------------
+ * Minimal login + dashboard states (functionality first, no decoration).
+ * ------------------------------------------------------------------------- */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.login-title {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-h);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.login-subtitle {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.login-label {
+  font-size: 12px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.login-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-h);
+  background: var(--bg-2, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.login-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.login-btn {
+  margin-top: 8px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #e11d48;
+}
+
+.dash-loading,
+.dash-error {
+  padding: 16px;
+  font-size: 14px;
+}
+
+.dash-error {
+  color: #e11d48;
+}
+
+.available-soon {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.socket-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.socket-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #16a34a;
+}
+
+.socket-indicator.off {
+  color: #e11d48;
+}
+
+.header-role {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.status-pending {
+  color: #d97706 !important;
+}
+

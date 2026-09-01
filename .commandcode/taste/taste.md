@@ -5,3 +5,15 @@
 - When doing a visual redesign/restyle, keeps existing mock/hardcoded data (IDs, statuses, sample values) as-is — restyles and relabels only rather than enriching or changing the data. Confidence: 0.8
 - Prefers avoiding new dependencies/external assets for styling — chooses existing system fonts and CSS-only decoration over adding webfont imports or libraries. Confidence: 0.8
 - Effort/ecosystem note: this machine's shell has `NODE_ENV=production` set, causing `npm install` to skip devDependencies (vite/eslint). Clear it (`set NODE_ENV= &&`) when installing/fixing dev tooling. Confidence: 0.8
+- Prioritizes functionality and correct data flow over visual polish — defers animations, decorative backgrounds, gradients, and redesign work until the app is functional. Confidence: 0.95
+- Prefers not rewriting existing working code; extends or keeps it unless the change is required. Confidence: 0.9
+- Prefers phased development: complete one phase, stop, report status (what's functional, what remains mocked, next steps), and do not auto-proceed to the next phase. Confidence: 0.9
+- Report depth follows the user's request: sometimes asks for brief summaries, sometimes for a detailed walkthrough (e.g. "tell me in detail what you did") covering exploration, changes, verification, and debugging — give the level of detail explicitly requested. Confidence: 0.7
+- Expects end-to-end runtime verification before reporting done — start the services, test the core flows, confirm existing pages still load, and fix any introduced errors. Confidence: 0.85
+- Prefers keeping mock data until real backend endpoints exist; explicitly dislikes faking successful backend operations. Confidence: 0.9
+- Wants secrets/config in environment variables, never hardcoded credentials. Confidence: 0.95
+- Frontend must never connect to the database directly — all data flows React → API/Socket.IO → Express → PostgreSQL. Confidence: 0.95
+- Prefers a single shared API service and single Socket.IO helper in the frontend — no competing API clients or duplicate socket connections. Confidence: 0.9
+- Business logic stays in the backend; does not want it duplicated in React components. Confidence: 0.9
+- Wants loading, error, empty, and socket-disconnected states handled gracefully in the UI. Confidence: 0.85
+- Wants phase-completion reports structured with specific sections: real vs mock data, endpoints used, socket events, DB changes, tests/results, remaining work. Confidence: 0.8

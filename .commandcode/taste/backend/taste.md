@@ -1,0 +1,10 @@
+- Enforces authorization on the backend; never relies on hiding buttons/routes in React as a security mechanism. Confidence: 0.95
+- Prefers a layered backend (routes → controllers → services → database) over putting business logic in server.js. Confidence: 0.95
+- Extends existing backend and project structure instead of creating duplicate backends or blindly scaffolding directories that already have equivalents. Confidence: 0.9
+- Validates important inputs on the backend and returns consistent error responses. Confidence: 0.85
+- Keeps development seed data clearly separated from production data. Confidence: 0.85
+- Prefers data-driven design for extensible features (e.g., games defined in the database, not hardcoded in the frontend) so new items don't require rewrites. Confidence: 0.85
+- Does not trust client-supplied IDs/tokens as proof of authorization or registration — validates against the backend. Confidence: 0.9
+- Avoids schema changes unless absolutely necessary; wants any required schema change explained before implementing it. Confidence: 0.9
+- Prefers not inventing new backend systems/endpoints unnecessarily — keeps isolated temporary mock data when no API exists rather than fabricating one. Confidence: 0.85
+- Business-critical tokens (e.g., food QR) are generated and validated only by the backend — the frontend never creates or fabricates them. Confidence: 0.9
