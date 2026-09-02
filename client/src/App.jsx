@@ -1,10 +1,24 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import RLGL from './pages/RLGL';
 import Admin from './pages/Admin';
+import RLGLControlPanel from './pages/RLGLControlPanel';
 import Login from './pages/Login';
 import RequireAuth from './components/RequireAuth';
 import { AuthProvider } from './context/AuthProvider.jsx';
+import { useAuth } from './context/useAuth.js';
+
+/** UX-only guard: admin pages are for ADMIN/DEV. Backend enforces for real. */
+function RequireAdmin({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'ADMIN' && user.role !== 'DEV') {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -31,7 +45,19 @@ function App() {
             path="/admin"
             element={
               <RequireAuth>
-                <Admin />
+                <RequireAdmin>
+                  <Admin />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin/games/rlgl"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <RLGLControlPanel />
+                </RequireAdmin>
               </RequireAuth>
             }
           />

@@ -44,7 +44,11 @@
       "Shell(node -e \"fetch('http://localhost:5000/api/health').then(r=>r.json()).then(d=>console.log('uptime', Math.round(d.uptime)))\")",
       "Shell(node \"C:\\Users\\anees\\AppData\\Local\\Temp\\commandcode\\C--Users-anees-CraftVerse\\7aec1dfc-81e4-4dfc-8cb1-573510d58a71\\scratchpad\\socket-notif-test.mjs\")",
       "Shell(node socket-notif-test.mjs)",
-      "Shell(node -e \"fetch('http://localhost:5173/login').then(r=>console.log('login page:', r.status)).catch(()=>console.log('down'))\")"
+      "Shell(node -e \"fetch('http://localhost:5173/login').then(r=>console.log('login page:', r.status)).catch(()=>console.log('down'))\")",
+      "Shell(node --check controllers/admin.controller.js)",
+      "Shell(npx eslint src/App.jsx src/pages/Admin.jsx src/pages/RLGLControlPanel.jsx)",
+      "Shell(node admin-socket-test.mjs)",
+      "Shell(node -e \"const get=async(p)=>{const r=await fetch('http://localhost:5173'+p); console.log(p, r.status)}; get('/login'); get('/'); get('/admin'); get('/admin/games/rlgl'); get('/games/rlgl');\")"
     ],
     "deny": [],
     "defaultMode": "default"

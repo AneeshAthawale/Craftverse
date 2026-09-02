@@ -157,6 +157,25 @@ CREATE TABLE IF NOT EXISTS inquiries (
 );
 
 -- ---------------------------------------------------------------------------
+-- event_status
+-- Singleton row (id = 1) holding the authoritative hackathon-wide event status.
+-- Source of truth for the event lifecycle: NOT_STARTED → LIVE ⇄ BREAK → ENDED.
+-- Distinct from games.status — a game can be LIVE while the event is BREAK, etc.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_status (
+  id           SMALLINT PRIMARY KEY CHECK (id = 1),
+  status       TEXT NOT NULL DEFAULT 'NOT_STARTED'
+               CHECK (status IN ('NOT_STARTED', 'LIVE', 'BREAK', 'ENDED')),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by   BIGINT REFERENCES users(user_id)
+);
+
+-- Seed the singleton row (idempotent).
+INSERT INTO event_status (id, status)
+VALUES (1, 'NOT_STARTED')
+ON CONFLICT (id) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
 -- Indexes for the most common lookups.
 -- ---------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

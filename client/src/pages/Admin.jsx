@@ -1,201 +1,484 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
+import api from '../services/api.js';
+import { onEvent, onSocketStatus } from '../services/socket.js';
+import { useAuth } from '../context/useAuth.js';
 import './Admin.css';
 
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+const NOTIF_TYPES = ['NORMAL', 'IMPORTANT', 'GAME', 'EMERGENCY'];
+const GAME_STATUS_META = {
+  LIVE: 'live',
+  UPCOMING: 'upcoming',
+  PAUSED: 'paused',
+  COMPLETED: 'completed',
+  LOCKED: 'locked',
+};
+
 export default function Admin() {
-  const [gameState, setGameState] = useState('PRE_GAME');
-  const [isCountdownActive, setIsCountdownActive] = useState(false);
-  const [countdownVal, setCountdownVal] = useState(3);
-  const [totalRoundTimer, setTotalRoundTimer] = useState(180);
-  const [connected, setConnected] = useState(false);
-  const [teams, setTeams] = useState({});
-  
-  const channelRef = useRef(null);
+  const { user, logout, socketConnected } = useAuth();
+
+  const [stats, setStats] = useState(null);
+  const [teams, setTeams] = useState(null);
+  const [participants, setParticipants] = useState(null);
+  const [games, setGames] = useState(null);
+  const [notifications, setNotifications] = useState(null);
+  const [inquiries, setInquiries] = useState(null);
+  const [error, setError] = useState('');
+
+  // Notification compose form.
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifMessage, setNotifMessage] = useState('');
+  const [notifType, setNotifType] = useState('NORMAL');
+  const [notifStatus, setNotifStatus] = useState('');
+
+  // Inquiry reply state: { id, status, response } | null
+  const [replying, setReplying] = useState(null);
+
+  // Registration verification.
+  const [regToken, setRegToken] = useState('');
+  const [regResult, setRegResult] = useState(null); // { ok, message, team? }
+  const [regBusy, setRegBusy] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    setError('');
+    try {
+      const [statsRes, teamsRes, partsRes, gamesRes, notifRes, inqRes] = await Promise.all([
+        api.get('/admin/stats'),
+        api.get('/teams'),
+        api.get('/participants'),
+        api.get('/games'),
+        api.get('/notifications'),
+        api.get('/inquiries'),
+      ]);
+      setStats(statsRes.stats);
+      setTeams(teamsRes.teams);
+      setParticipants(partsRes.participants);
+      setGames(gamesRes.games);
+      setNotifications(notifRes.notifications);
+      setInquiries(inqRes.inquiries);
+    } catch (err) {
+      setError(err.message || 'Could not load admin dashboard');
+    }
+  }, []);
 
   useEffect(() => {
-    channelRef.current = new BroadcastChannel('rlgl-admin-channel');
-    
-    const handleMessage = (event) => {
-      if (event.data.type === 'STATE_SYNC') {
-        const { payload } = event.data;
-        
-        if (payload.gameState === 'PRE_GAME' || payload.gameState === 'GREEN_LIGHT' || payload.gameState === 'RED_LIGHT') {
-          setGameState(payload.gameState);
-        }
-        
-        if (payload.isCountdownActive !== undefined) setIsCountdownActive(payload.isCountdownActive);
-        if (payload.countdownVal !== undefined) setCountdownVal(payload.countdownVal);
-        if (payload.totalRoundTimer !== undefined) setTotalRoundTimer(payload.totalRoundTimer);
-        setConnected(true);
+    queueMicrotask(loadAll);
+  }, [loadAll]);
 
-        if (payload.teamName) {
-          setTeams(prev => ({
-            ...prev,
-            [payload.teamName]: {
-              gameState: payload.gameState,
-              lastSeen: Date.now()
+  // Socket subscriptions (cleaned up on unmount).
+  useEffect(() => {
+    const offNotif = onEvent('notification:new', ({ notification }) => {
+      setNotifications((prev) => [notification, ...(prev ?? [])]);
+    });
+    const offInqNew = onEvent('inquiry:new', ({ inquiry }) => {
+      setInquiries((prev) => [inquiry, ...(prev ?? [])]);
+    });
+    const offInqUpd = onEvent('inquiry:updated', ({ inquiry }) => {
+      setInquiries((prev) =>
+        (prev ?? []).map((i) => (i.inquiry_id === inquiry.inquiry_id ? inquiry : i))
+      );
+    });
+    const offGame = onEvent('game:updated', () => {
+      // Refresh games list on any game status change.
+      api.get('/games').then((r) => setGames(r.games)).catch(() => {});
+    });
+    const offReg = onEvent('registration:completed', ({ team }) => {
+      if (!team) return;
+      setTeams((prev) =>
+        (prev ?? []).map((t) =>
+          t.team_id === team.team_id ? { ...t, registration_status: 'REGISTERED', registered_at: team.registered_at } : t
+        )
+      );
+      setStats((prev) =>
+        prev
+          ? {
+              ...prev,
+              registeredTeams: prev.registeredTeams + 1,
+              pendingTeams: Math.max(0, prev.pendingTeams - 1),
             }
-          }));
-        }
-      }
-    };
-
-    channelRef.current.addEventListener('message', handleMessage);
-    
-    // Request initial sync
-    channelRef.current.postMessage({ type: 'REQUEST_SYNC' });
-
-    // Clean up stale teams (no updates for 15 seconds)
-    const cleanup = setInterval(() => {
-      setTeams(prev => {
-        const now = Date.now();
-        const updated = { ...prev };
-        let changed = false;
-        for (const team in updated) {
-          if (now - updated[team].lastSeen > 15000) {
-            delete updated[team];
-            changed = true;
-          }
-        }
-        return changed ? updated : prev;
-      });
-    }, 5000);
+          : prev
+      );
+    });
+    const offStatus = onSocketStatus(() => {}); // keep socket helper wired
 
     return () => {
-      channelRef.current.removeEventListener('message', handleMessage);
-      clearInterval(cleanup);
+      offNotif();
+      offInqNew();
+      offInqUpd();
+      offGame();
+      offReg();
+      offStatus();
     };
   }, []);
 
-  const handleAdminTriggerStateChange = () => {
-    if (isCountdownActive || (gameState !== 'GREEN_LIGHT' && gameState !== 'RED_LIGHT')) return;
-    
-    if (channelRef.current) {
-      channelRef.current.postMessage({ type: 'TRIGGER_STATE_CHANGE' });
+  const handleSendNotification = async (e) => {
+    e.preventDefault();
+    if (!notifTitle.trim() || !notifMessage.trim()) return;
+    setNotifStatus('sending');
+    try {
+      await api.post('/notifications', {
+        type: notifType,
+        title: notifTitle.trim(),
+        message: notifMessage.trim(),
+      });
+      setNotifTitle('');
+      setNotifMessage('');
+      setNotifType('NORMAL');
+      setNotifStatus('sent');
+      setTimeout(() => setNotifStatus(''), 2500);
+    } catch (err) {
+      setNotifStatus('error:' + (err.message || 'Could not send'));
     }
   };
 
-  const handleDisqualifyAll = () => {
-    if (channelRef.current) {
-      channelRef.current.postMessage({ type: 'DISQUALIFY_TEAM' });
+  const handleVerifyRegistration = async (e) => {
+    e.preventDefault();
+    const token = regToken.trim();
+    if (!token) return;
+    setRegBusy(true);
+    setRegResult(null);
+    try {
+      const data = await api.post('/registration/verify', { token });
+      setRegResult({ ok: true, message: `Team ${data.team.team_name} (${data.team.team_id}) registered.` });
+      setRegToken('');
+      // Update UI immediately; socket event also updates other admin clients.
+      setTeams((prev) =>
+        (prev ?? []).map((t) =>
+          t.team_id === data.team.team_id ? { ...t, registration_status: 'REGISTERED', registered_at: data.team.registered_at } : t
+        )
+      );
+      setStats((prev) =>
+        prev
+          ? {
+              ...prev,
+              registeredTeams: prev.registeredTeams + 1,
+              pendingTeams: Math.max(0, prev.pendingTeams - 1),
+            }
+          : prev
+      );
+      loadAll();
+    } catch (err) {
+      setRegResult({ ok: false, message: err.message || 'Verification failed' });
+    } finally {
+      setRegBusy(false);
     }
   };
 
-  const handleDisqualifySpecific = (teamName) => {
-    if (channelRef.current) {
-      channelRef.current.postMessage({ type: 'DISQUALIFY_SPECIFIC_TEAM', payload: { teamName } });
+  const handleReply = async (e) => {
+    e.preventDefault();
+    if (!replying) return;
+    const body = {};
+    if (replying.status) body.status = replying.status;
+    if (replying.response !== undefined) body.response = replying.response;
+    if (Object.keys(body).length === 0) return;
+    try {
+      const { inquiry } = await api.patch(`/inquiries/${replying.id}`, body);
+      setInquiries((prev) =>
+        (prev ?? []).map((i) => (i.inquiry_id === inquiry.inquiry_id ? inquiry : i))
+      );
+      setReplying(null);
+    } catch (err) {
+      setError(err.message || 'Could not update inquiry');
     }
   };
 
-  const activeTeams = [];
-  const disqualifiedTeams = [];
-  const victoriousTeams = [];
+  if (!stats && !error) {
+    return (
+      <div className="admin-page">
+        <p className="dash-loading">Loading admin dashboard…</p>
+      </div>
+    );
+  }
 
-  Object.entries(teams).forEach(([teamName, data]) => {
-    if (data.gameState === 'DISQUALIFIED') {
-      disqualifiedTeams.push(teamName);
-    } else if (data.gameState === 'VICTORY') {
-      victoriousTeams.push(teamName);
-    } else {
-      activeTeams.push(teamName);
-    }
-  });
+  const statCards = stats
+    ? [
+        { label: 'Teams', value: stats.teams },
+        { label: 'Registered', value: stats.registeredTeams },
+        { label: 'Pending', value: stats.pendingTeams },
+        { label: 'Participants', value: stats.participants },
+        { label: 'Live Games', value: stats.liveGames },
+        { label: 'Completed', value: stats.completedGames },
+        { label: 'Open Inquiries', value: stats.openInquiries },
+      ]
+    : [];
 
   return (
-    <div className="admin-page-container dashboard-layout">
-      {/* Sidebar Controls */}
-      <div className="admin-sidebar">
-        <div className="admin-console-header">
-          <span>👑 CRAFTVERSE ADMIN</span>
+    <div className="admin-page">
+      <header className="admin-header">
+        <div className="admin-header-left">
+          <h1 className="admin-title">CraftVerse</h1>
+          <span className="admin-subtitle">ADMIN CONSOLE</span>
         </div>
+        <div className="admin-header-right">
+          {socketConnected ? (
+            <span className="socket-indicator">● LIVE</span>
+          ) : (
+            <span className="socket-indicator off">○ OFFLINE</span>
+          )}
+          <span className="admin-identity">
+            {user?.email ?? 'admin'} <span className="header-role">{user?.role ?? 'ADMIN'}</span>
+          </span>
+          <Link to="/" className="admin-link">Participant View</Link>
+          <button className="admin-logout" onClick={logout}>Logout</button>
+        </div>
+      </header>
 
-        <div className="admin-console-content">
-          <div className="admin-status-indicator">
-            <div className="status-row">
-               Light State: <strong style={{ color: gameState === 'GREEN_LIGHT' ? '#00e676' : gameState === 'RED_LIGHT' ? '#ff1744' : '#fff' }}>{gameState}</strong>
-            </div>
-            <div className="status-row">
-               Round Timer: <strong>{totalRoundTimer}s</strong>
-            </div>
-            {isCountdownActive && <div className="admin-countdown-badge"> [Countdown {countdownVal}s active]</div>}
+      {error && <p className="dash-error">⚠ {error}</p>}
+
+      <main className="admin-main">
+        {/* Stats */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Overview</h2>
+          <div className="admin-stats-grid">
+            {statCards.map((s) => (
+              <div key={s.label} className="admin-stat-card">
+                <span className="admin-stat-value">{s.value}</span>
+                <span className="admin-stat-label">{s.label}</span>
+              </div>
+            ))}
           </div>
+        </section>
 
-          <div className="admin-action-buttons">
-            <button
-              className={`btn-admin-toggle ${gameState === 'GREEN_LIGHT' ? 'to-red' : 'to-green'}`}
-              onClick={handleAdminTriggerStateChange}
-              disabled={isCountdownActive || (gameState !== 'GREEN_LIGHT' && gameState !== 'RED_LIGHT')}
-            >
-              {isCountdownActive
-                ? `Switching in ${countdownVal}s...`
-                : gameState === 'GREEN_LIGHT'
-                ? '🔴 CHANGE TO RED LIGHT'
-                : gameState === 'RED_LIGHT'
-                ? '🟢 CHANGE TO GREEN LIGHT'
-                : 'WAITING FOR GAME START'}
+        {/* Registration verification */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Registration Verification</h2>
+          <p className="admin-section-desc">
+            Scan or paste the team's Registration QR token. The backend validates it.
+          </p>
+          <form className="admin-inline-form" onSubmit={handleVerifyRegistration}>
+            <input
+              className="admin-input"
+              type="text"
+              placeholder="cv-reg-T01-…"
+              value={regToken}
+              onChange={(e) => setRegToken(e.target.value)}
+            />
+            <button className="admin-btn" type="submit" disabled={regBusy || !regToken.trim()}>
+              {regBusy ? 'Verifying…' : 'Verify Registration'}
             </button>
+          </form>
+          {regResult && (
+            <p className={regResult.ok ? 'admin-ok' : 'admin-err'}>
+              {regResult.ok ? '✓ ' : '✗ '}
+              {regResult.message}
+            </p>
+          )}
+        </section>
 
-            <button
-              className="btn-admin-danger"
-              onClick={handleDisqualifyAll}
-              disabled={gameState === 'PRE_GAME' || gameState === 'DISQUALIFIED' || gameState === 'VICTORY'}
+        {/* Teams */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Teams</h2>
+          {!teams ? (
+            <p className="available-soon">Loading teams…</p>
+          ) : teams.length === 0 ? (
+            <p className="available-soon">No teams yet.</p>
+          ) : (
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Team ID</th>
+                  <th>Name</th>
+                  <th>Registration</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teams.map((t) => (
+                  <tr key={t.team_id}>
+                    <td className="mono">{t.team_id}</td>
+                    <td>{t.team_name}</td>
+                    <td>
+                      <span className={`status-chip ${t.registration_status === 'REGISTERED' ? 'ok' : 'pending'}`}>
+                        {t.registration_status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        {/* Participants */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Participants</h2>
+          {!participants ? (
+            <p className="available-soon">Loading participants…</p>
+          ) : participants.length === 0 ? (
+            <p className="available-soon">No participants yet.</p>
+          ) : (
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Name</th>
+                  <th>Team</th>
+                </tr>
+              </thead>
+              <tbody>
+                {participants.map((p) => (
+                  <tr key={p.participant_id}>
+                    <td className="mono">P{String(p.participant_id).padStart(3, '0')}</td>
+                    <td>{p.name}</td>
+                    <td className="mono">{p.team_id}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        {/* Games + control panel links */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Game Control Center</h2>
+          {!games ? (
+            <p className="available-soon">Loading games…</p>
+          ) : games.length === 0 ? (
+            <p className="available-soon">No games scheduled.</p>
+          ) : (
+            <div className="admin-games-grid">
+              {games.map((g) => (
+                <div key={g.game_id} className="admin-game-card">
+                  <div className="admin-game-top">
+                    <h3>{g.name}</h3>
+                    <span className={`status-chip ${GAME_STATUS_META[g.status] || 'locked'}`}>
+                      {g.status}
+                    </span>
+                  </div>
+                  {g.description && <p className="admin-game-desc">{g.description}</p>}
+                  {g.route && <p className="mono admin-game-route">/{g.route}</p>}
+                  <div className="admin-game-actions">
+                    {g.status === 'LIVE' && g.route === 'rlgl' && (
+                      <Link to="/admin/games/rlgl" className="admin-btn admin-btn-link">
+                        Open Control Panel →
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Notifications */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Notifications</h2>
+          <form className="admin-notif-form" onSubmit={handleSendNotification}>
+            <select
+              className="admin-input"
+              value={notifType}
+              onChange={(e) => setNotifType(e.target.value)}
             >
-              🛑 FORCE DISQUALIFY ALL
+              {NOTIF_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <input
+              className="admin-input"
+              type="text"
+              placeholder="Title"
+              value={notifTitle}
+              onChange={(e) => setNotifTitle(e.target.value)}
+            />
+            <input
+              className="admin-input"
+              type="text"
+              placeholder="Message"
+              value={notifMessage}
+              onChange={(e) => setNotifMessage(e.target.value)}
+            />
+            <button className="admin-btn" type="submit" disabled={notifStatus === 'sending'}>
+              Send
             </button>
-          </div>
-          <div className="status-row connection-info">
-             <span className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-               {connected ? '🟢 Connected to Arena' : '🔴 Disconnected'}
-             </span>
-          </div>
-        </div>
-      </div>
+          </form>
+          {notifStatus === 'sent' && <p className="admin-ok">✓ Notification sent.</p>}
+          {notifStatus.startsWith('error') && <p className="admin-err">✗ {notifStatus.slice(6)}</p>}
 
-      {/* Main Dashboard Panel */}
-      <div className="admin-main-panel">
-        <div className="dashboard-header">
-           <h2>Game Dashboard</h2>
-           <p>Live tracking of all connected teams.</p>
-        </div>
-        
-        <div className="teams-grid">
-           {/* Active Teams Column */}
-           <div className="teams-column">
-              <h3>ACTIVE TEAMS ({activeTeams.length})</h3>
-              <div className="teams-list active-list">
-                 {activeTeams.length === 0 ? <p className="empty-msg">No active teams.</p> : activeTeams.map(t => (
-                   <div key={t} className="team-card active-team">
-                      <span className="team-name">{t}</span>
-                      <button className="btn-sm-danger" onClick={() => handleDisqualifySpecific(t)}>Disqualify</button>
-                   </div>
-                 ))}
-              </div>
-           </div>
-           
-           {/* Victorious Teams Column */}
-           <div className="teams-column">
-              <h3>VICTORIOUS TEAMS ({victoriousTeams.length})</h3>
-              <div className="teams-list victory-list">
-                 {victoriousTeams.length === 0 ? <p className="empty-msg">No winners yet.</p> : victoriousTeams.map(t => (
-                   <div key={t} className="team-card victory-team">
-                      <span className="team-name">🏆 {t}</span>
-                   </div>
-                 ))}
-              </div>
-           </div>
-           
-           {/* Disqualified Teams Column */}
-           <div className="teams-column">
-              <h3>DISQUALIFIED ({disqualifiedTeams.length})</h3>
-              <div className="teams-list disqualified-list">
-                 {disqualifiedTeams.length === 0 ? <p className="empty-msg">No disqualified teams.</p> : disqualifiedTeams.map(t => (
-                   <div key={t} className="team-card disqualified-team">
-                      <span className="team-name">💀 {t}</span>
-                   </div>
-                 ))}
-              </div>
-           </div>
-        </div>
-      </div>
+          {!notifications ? (
+            <p className="available-soon">Loading notifications…</p>
+          ) : notifications.length === 0 ? (
+            <p className="available-soon">No notifications yet.</p>
+          ) : (
+            <ul className="admin-list">
+              {notifications.map((n) => (
+                <li key={n.notification_id} className="admin-list-item">
+                  <span className="mono admin-list-time">{fmtTime(n.created_at)}</span>
+                  <span className={`status-chip ${n.type === 'EMERGENCY' ? 'danger' : n.type === 'IMPORTANT' ? 'warn' : 'info'}`}>
+                    {n.type}
+                  </span>
+                  <span><strong>{n.title}</strong> — {n.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* Inquiries */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Inquiries</h2>
+          {!inquiries ? (
+            <p className="available-soon">Loading inquiries…</p>
+          ) : inquiries.length === 0 ? (
+            <p className="available-soon">No inquiries yet.</p>
+          ) : (
+            <ul className="admin-list">
+              {inquiries.map((q) => (
+                <li key={q.inquiry_id} className="admin-list-item admin-inquiry">
+                  <div className="admin-inquiry-top">
+                    <span className={`status-chip ${q.status === 'OPEN' ? 'pending' : q.status === 'IN_PROGRESS' ? 'warn' : 'ok'}`}>
+                      {q.status}
+                    </span>
+                    <span className="mono admin-inquiry-meta">
+                      {q.participant_id ? `P${String(q.participant_id).padStart(3, '0')}` : '—'} · {q.team_id ?? '—'} · {fmtTime(q.created_at)}
+                    </span>
+                  </div>
+                  <p className="admin-inquiry-text"><strong>{q.title}</strong> — {q.message}</p>
+                  {q.response && (
+                    <p className="admin-inquiry-response"><span>Staff:</span> {q.response}</p>
+                  )}
+                  {replying && replying.id === q.inquiry_id ? (
+                    <form className="admin-inline-form" onSubmit={handleReply}>
+                      <select
+                        className="admin-input"
+                        value={replying.status}
+                        onChange={(e) => setReplying({ ...replying, status: e.target.value })}
+                      >
+                        <option value="OPEN">OPEN</option>
+                        <option value="IN_PROGRESS">IN PROGRESS</option>
+                        <option value="RESOLVED">RESOLVED</option>
+                      </select>
+                      <input
+                        className="admin-input"
+                        type="text"
+                        placeholder="Response"
+                        value={replying.response ?? ''}
+                        onChange={(e) => setReplying({ ...replying, response: e.target.value })}
+                      />
+                      <button className="admin-btn" type="submit">Save</button>
+                      <button className="admin-btn admin-btn-ghost" type="button" onClick={() => setReplying(null)}>
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      className="admin-btn admin-btn-ghost"
+                      onClick={() => setReplying({ id: q.inquiry_id, status: q.status, response: q.response ?? '' })}
+                    >
+                      Respond
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </main>
     </div>
   );
 }
