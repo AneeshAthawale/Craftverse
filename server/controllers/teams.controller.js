@@ -44,3 +44,21 @@ export const getTeamQr = asyncHandler(async (req, res) => {
     token,
   });
 });
+
+/** A team's own game results — same ownership rule as getTeam. */
+export const getTeamResults = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // TEAM/PARTICIPANT users may only view their own team's results.
+  if (
+    (req.user.role === 'TEAM' || req.user.role === 'PARTICIPANT') &&
+    req.user.team_id !== id
+  ) {
+    throw ApiError.forbidden('You can only view your own team results');
+  }
+
+  // 404 for an unknown team (matches getTeam behavior via getTeamById).
+  await teamService.getTeamById(id);
+  const results = await teamService.getTeamResults(id);
+  res.json({ results });
+});

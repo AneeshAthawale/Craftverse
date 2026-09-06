@@ -1,4 +1,6 @@
 - Enforces authorization on the backend; never relies on hiding buttons/routes in React as a security mechanism. Confidence: 0.95
+- Persists authoritative state changes and scheduled transition deadlines to the database BEFORE broadcasting over sockets, and re-derives state from storage on boot/heal and on client refresh/join/reconnect — in-flight transitions are never reset, and client-side timers are display-only against the server clock. Confidence: 0.85
+- Enforces row-level ownership server-side: each data endpoint returns only what the caller may see (e.g. an own-team results endpoint), and never fetches all records to filter them in React — filtering unauthorized global data in the client is explicitly rejected. Confidence: 0.9
 - Prefers a layered backend (routes → controllers → services → database) over putting business logic in server.js. Confidence: 0.95
 - Extends existing backend and project structure instead of creating duplicate backends or blindly scaffolding directories that already have equivalents. Confidence: 0.9
 - Validates important inputs on the backend and returns consistent error responses. Confidence: 0.85
@@ -8,3 +10,5 @@
 - Avoids schema changes unless absolutely necessary; wants any required schema change explained before implementing it. Confidence: 0.9
 - Prefers not inventing new backend systems/endpoints unnecessarily — keeps isolated temporary mock data when no API exists rather than fabricating one. Confidence: 0.85
 - Business-critical tokens (e.g., food QR) are generated and validated only by the backend — the frontend never creates or fabricates them. Confidence: 0.9
+- Keeps per-role dev credentials distinct in seed data (e.g., dev/admin logins with one password, team/participant with another) — explicitly rejects flattening all roles onto a single shared password. Confidence: 0.9
+- Extends the backend test suite when adding new authoritative backend logic (e.g. violation/disqualification paths, including the REST fallback) and runs the full backend suite plus the frontend build before reporting done. Confidence: 0.75

@@ -25,3 +25,21 @@ export async function getTeamParticipants(teamId) {
   );
   return rows;
 }
+
+/**
+ * A single team's own game results (plan.md §16). Ownership is enforced by the
+ * controller — this never exposes other teams' rows.
+ */
+export async function getTeamResults(teamId) {
+  const { rows } = await query(
+    `SELECT gr.result_id, gr.game_id, g.name AS game_name, g.status AS game_status,
+            gr.team_id, gr.rank, gr.score, gr.time_seconds,
+            gr.status AS result_status, gr.created_at, gr.updated_at
+     FROM game_results gr
+     JOIN games g ON g.game_id = gr.game_id
+     WHERE gr.team_id = $1
+     ORDER BY gr.created_at DESC, gr.game_id`,
+    [teamId]
+  );
+  return rows;
+}

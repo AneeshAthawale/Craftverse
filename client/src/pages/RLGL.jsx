@@ -1,611 +1,461 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Editor } from '@monaco-editor/react';
+import api from '../services/api.js';
+import { onEvent, onReconnect, getSocket } from '../services/socket.js';
+import { useAuth } from '../context/useAuth.js';
 import './RLGL.css';
 
-// --- HACKATHON OFFICIAL DOMAINS & PROBLEMS ---
-const DOMAINS = [
-  'AIML', 'SPACETECH', 'CYBERSECURITY', 'SMART CITIES & IOT',
-  'HEALTHCARE & MEDTECH', 'SUSTAINABILITY', 'FINTECH',
-  'ROBOTICS & AUTOMATION', 'AR/VR & GAMING', 'EDTECH', 'OPEN INNOVATION'
-];
-
-const PROBLEMS = [
-{
-    id: 'easy_1',
-    title: '1. Cyber String Decryptor (Reverse Words)',
-    domain: 'CYBERSECURITY',
-    difficulty: 'Easy',
-    description: 'Part of Round 2 Cybersecurity task: Write a function `reverseWords(str)` that takes an encrypted telemetry packet of words separated by spaces and reverses the order of words while trimming extra whitespace.',
-    starterCode: `function reverseWords(str) {\n  // Code during GREEN LIGHT ONLY!\n  return str.trim().split(/\\s+/).reverse().join(" ");\n}`,
-    testCases: [
-      { input: ['"the sky is blue"'], expected: '"blue is sky the"' },
-      { input: ['"  hello world  "'], expected: '"world hello"' },
-      { input: ['"a good   example"'], expected: '"example good a"' }
-    ],
-    fnName: 'reverseWords'
-  },
-  {
-    id: 'medium_1',
-    title: '2. FinTech Transaction Matcher (Two Sum)',
-    domain: 'FINTECH',
-    difficulty: 'Medium',
-    description: 'Part of Round 2 FinTech task: Write a function `twoSum(nums, target)` that returns the 0-based indices of two transaction amounts in an array that sum up to `target`. Return `[idx1, idx2]`.',
-    starterCode: `function twoSum(nums, target) {\n  // Code during GREEN LIGHT ONLY!\n  for (let i = 0; i < nums.length; i++) {\n    for (let j = i + 1; j < nums.length; j++) {\n      if (nums[i] + nums[j] === target) return [i, j];\n    }\n  }\n  return [];\n}`,
-    testCases: [
-      { input: ['[2, 7, 11, 15]', '9'], expected: '[0, 1]' },
-      { input: ['[3, 2, 4]', '6'], expected: '[1, 2]' },
-      { input: ['[3, 3]', '6'], expected: '[0, 1]' }
-    ],
-    fnName: 'twoSum'
-  },
-  {
-    id: 'hard_1',
-    title: '3. SpaceTech Payload Parser (Valid Parentheses)',
-    domain: 'SPACETECH',
-    difficulty: 'Hard',
-    description: 'Part of Round 2 SpaceTech task: Write a function `isValid(s)` that verifies if satellite data packet containing brackets `()[]{}` is structured validly.',
-    starterCode: `function isValid(s) {\n  // Code during GREEN LIGHT ONLY!\n  const stack = [];\n  const map = { ")": "(", "]": "[", "}": "{" };\n  for (let char of s) {\n    if (char in map) {\n      if (stack.pop() !== map[char]) return false;\n    } else {\n      stack.push(char);\n    }\n  }\n  return stack.length === 0;\n}`,
-    testCases: [
-      { input: ['"()"'], expected: 'true' },
-      { input: ['"()[]{}"'], expected: 'true' },
-      { input: ['"(]"'], expected: 'false' }
-    ],
-    fnName: 'isValid'
-  }
-];
+/** A tiny ticking clock (250ms) so corner countdowns re-render smoothly.
+ *  Purely cosmetic — the authoritative state change arrives via rlgl:state.
+ *  The snapshot is CACHED (only updated when the interval fires) because
+ *  useSyncExternalStore requires getSnapshot to return a stable value between
+ *  ticks — a fresh Date.now() every call triggers an infinite render loop. */
+let tickerSnapshot = Date.now();
+function subscribeTicker(callback) {
+  const interval = setInterval(() => {
+    tickerSnapshot = Date.now();
+    callback();
+  }, 250);
+  return () => clearInterval(interval);
+}
+const getTickerSnapshot = () => tickerSnapshot;
 
 export default function RLGL() {
-  const [teamName] = useState(() => `Team ${Math.floor(Math.random() * 9000) + 1000}`);
-  const [gameState, setGameState] = useState('PRE_GAME'); // PRE_GAME | GREEN_LIGHT | RED_LIGHT | DISQUALIFIED | VICTORY
-  const [selectedProblemIdx, setSelectedProblemIdx] = useState(0);
-  const [userCode, setUserCode] = useState(PROBLEMS[0].starterCode);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [totalRoundTimer, setTotalRoundTimer] = useState(180); // 3 minutes total
-  const [prizePool, setPrizePool] = useState(60000); // ₹60,000+
-  const [testResults, setTestResults] = useState([]);
-  const [disqualifyReason, setDisqualifyReason] = useState('');
-  const [podium, setPodium] = useState([]);
+  const { user, socketConnected } = useAuth();
 
-  // --- ADMIN CONTROLLED COUNTDOWN STATE ---
-  const [isCountdownActive, setIsCountdownActive] = useState(false);
-  const [countdownVal, setCountdownVal] = useState(3);
-  const [nextState, setNextState] = useState('RED_LIGHT');
+  // Authoritative game state from GET /api/games/rlgl/state + rlgl:state events.
+  const [problem, setProblem] = useState(null); // from games.config.problem
+  const [light, setLight] = useState('GREEN'); // current authoritative light
+  const [roundStatus, setRoundStatus] = useState('WAITING'); // WAITING | ACTIVE | COMPLETED
+  const [transition, setTransition] = useState(null); // { to, appliesAt } | null
+  const [myResult, setMyResult] = useState(null); // my team's game_results row | null
 
-  const activeProblem = PROBLEMS[selectedProblemIdx];
-  const audioCtxRef = useRef(null);
-  
-  // Use a ref for broadcast channel to avoid re-creations
-  const channelRef = useRef(null);
+  // Team identity — always from the authenticated user, never from the URL.
+  const [team, setTeam] = useState(null); // { team_id, team_name } from GET /teams/:id
+  const teamId = user?.team_id ?? null;
 
-  // Initialize Web Audio Synth
-  const playSynthSound = (type) => {
-    if (!soundEnabled) return;
-    try {
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+  const [code, setCode] = useState('');
+  const [testOutcome, setTestOutcome] = useState(null); // { passed, passedCount, total, results } | null
+  const [submitState, setSubmitState] = useState('idle'); // idle | running | passed | error
+  const [submitError, setSubmitError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  // A ticking clock drives countdown re-renders; the authoritative transition
+  // still arrives via rlgl:state (this is display-only). The store snapshot is
+  // an external "now" the render can read without calling an impure function.
+  const nowMs = useSyncExternalStore(subscribeTicker, getTickerSnapshot);
+  // Remaining whole seconds to the pending transition (display only). The chip
+  // is hidden at 0 so the player never sees a stale "0s" while the server's
+  // flip broadcast is in flight — the authoritative light change replaces it.
+  const transitionSeconds = transition ? Math.max(0, Math.ceil((transition.appliesAt - nowMs) / 1000)) : 0;
+  const transitionPending =
+    Boolean(transition) &&
+    roundStatus === 'ACTIVE' &&
+    transitionSeconds > 0 &&
+    // If the current light already equals the pending target, the transition
+    // applied — never show a chip over the new state.
+    light !== transition.to;
+
+  const redLight = light === 'RED';
+  // The editor is NEVER read-only during an ACTIVE round — RED LIGHT detects
+  // illegal typing instead of preventing it. Only round lifecycle (non-ACTIVE)
+  // locks the editor, and only the Reset/Run actions are disabled during RED.
+  const roundInactive = roundStatus !== 'ACTIVE';
+  const myStatus = myResult?.status; // PLAYING | WINNER | DISQUALIFIED | QUALIFIED
+
+  // Tracks that THIS tab already reported a RED-light typing violation, so a
+  // stream of keystrokes produces exactly one report (the server disqualified
+  // the team on the first one). Reset when the round starts or the team is
+  // reinstated — both arrive as rlgl:state (gameStatus ACTIVE) or rlgl:result
+  // with a non-DISQUALIFIED status.
+  const violationSent = useRef(false);
+  useEffect(() => {
+    if (roundStatus === 'ACTIVE' && myStatus !== 'DISQUALIFIED') {
+      violationSent.current = false;
+    }
+  }, [roundStatus, myStatus]);
+
+  // RED LIGHT monitors illegal typing instead of blocking the editor. While the
+  // authoritative state is RED (and only then), any key the player types in the
+  // editor is reported once to the backend; the backend validates team + state
+  // and is the sole authority on disqualification. We do NOT require a locally
+  // known result — a fresh page load has none until rlgl:result arrives, and
+  // the backend still has the authoritative row.
+  const reportViolation = useRef(async () => {});
+  reportViolation.current = async () => {
+    if (!redLight || roundStatus !== 'ACTIVE') return;
+    if (myStatus === 'DISQUALIFIED' || myStatus === 'WINNER') return;
+    if (violationSent.current) return;
+    violationSent.current = true; // one report per RED phase
+    const socket = getSocket();
+    if (socket?.connected) {
+      socket.emit('rlgl:violation', {}, (ack) => {
+        if (!ack?.ok) violationSent.current = false; // rejected — allow retry
+      });
+    } else {
+      // Socket down (tab just restored / reconnecting): fall back to the REST
+      // endpoint so the violation still reaches the backend authoritatively.
+      try {
+        await api.post('/games/rlgl/violation');
+      } catch {
+        violationSent.current = false; // failed — allow retry
       }
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      const now = ctx.currentTime;
-
-      if (type === 'BEEP_3') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(600, now);
-        gain.gain.setValueAtTime(0.2, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
-        osc.start(now);
-        osc.stop(now + 0.25);
-      } else if (type === 'GREEN') {
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(440, now);
-        osc.frequency.exponentialRampToValueAtTime(880, now + 0.2);
-        gain.gain.setValueAtTime(0.15, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-        osc.start(now);
-        osc.stop(now + 0.3);
-      } else if (type === 'RED') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(150, now);
-        osc.frequency.linearRampToValueAtTime(90, now + 0.5);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
-        osc.start(now);
-        osc.stop(now + 0.5);
-      } else if (type === 'ELIMINATED') {
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(120, now);
-        osc.frequency.exponentialRampToValueAtTime(30, now + 0.6);
-        gain.gain.setValueAtTime(0.5, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
-        osc.start(now);
-        osc.stop(now + 0.6);
-      } else if (type === 'VICTORY') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(523.25, now);
-        osc.frequency.setValueAtTime(659.25, now + 0.15);
-        osc.frequency.setValueAtTime(783.99, now + 0.3);
-        osc.frequency.setValueAtTime(1046.5, now + 0.45);
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
-        osc.start(now);
-        osc.stop(now + 0.8);
-      }
-    } catch (e) {
-      console.warn('Audio Context Error:', e);
     }
   };
-
-  // Broadcast state changes to Admin
   useEffect(() => {
-    if (!channelRef.current) {
-      channelRef.current = new BroadcastChannel('rlgl-admin-channel');
-    }
-    channelRef.current.postMessage({
-      type: 'STATE_SYNC',
-      payload: {
-        teamName,
-        gameState,
-        isCountdownActive,
-        countdownVal,
-        nextState,
-        totalRoundTimer
-      }
-    });
-  }, [gameState, isCountdownActive, countdownVal, nextState, totalRoundTimer, teamName]);
-
-  // Listen for commands from Admin
-  useEffect(() => {
-    if (!channelRef.current) {
-      channelRef.current = new BroadcastChannel('rlgl-admin-channel');
-    }
-    
-    const handleMessage = (event) => {
-      const { type } = event.data;
-      if (type === 'TRIGGER_STATE_CHANGE') {
-        setGameState((currentGameState) => {
-          if (isCountdownActive || (currentGameState !== 'GREEN_LIGHT' && currentGameState !== 'RED_LIGHT')) return currentGameState;
-          
-          const target = currentGameState === 'GREEN_LIGHT' ? 'RED_LIGHT' : 'GREEN_LIGHT';
-          setNextState(target);
-          setIsCountdownActive(true);
-          setCountdownVal(3);
-          playSynthSound('BEEP_3');
-          return currentGameState;
-        });
-      } else if (type === 'DISQUALIFY_TEAM') {
-        setGameState('DISQUALIFIED');
-        setDisqualifyReason('DISQUALIFIED! Admin manually issued team disqualification penalty.');
-        playSynthSound('ELIMINATED');
-      } else if (type === 'DISQUALIFY_SPECIFIC_TEAM') {
-        if (event.data.payload && event.data.payload.teamName === teamName) {
-          setGameState('DISQUALIFIED');
-          setDisqualifyReason('DISQUALIFIED! Admin manually disqualified your team.');
-          playSynthSound('ELIMINATED');
-        }
-      } else if (type === 'REQUEST_SYNC') {
-         channelRef.current.postMessage({
-          type: 'STATE_SYNC',
-          payload: {
-            teamName,
-            gameState,
-            isCountdownActive,
-            countdownVal,
-            nextState,
-            totalRoundTimer
-          }
-        });
+    const onKeyDown = (e) => {
+      const target = e.target;
+      // Only editor content typing counts. Monaco focuses a <textarea> inside
+      // .monaco-editor — accept any element under that container. Modifier-only
+      // chords are ignored.
+      if (!target || target !== document.activeElement) return;
+      if (!(target instanceof Element)) return;
+      if (!target.closest('.monaco-editor')) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta' || e.key === 'CapsLock') return;
+      if (e.key.length === 1 || ['Backspace', 'Delete', 'Enter', 'Tab', 'Space'].includes(e.key)) {
+        e.preventDefault();
+        reportViolation.current();
       }
     };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [redLight, roundStatus, myStatus, violationSent]);
 
-    channelRef.current.addEventListener('message', handleMessage);
+  // Load authoritative state on mount + after every reconnect.
+  useEffect(() => {
+    const fetchState = async () => {
+      try {
+        const data = await api.get('/games/rlgl/state');
+        setProblem(data.problem);
+        setLight(data.state.light);
+        setRoundStatus(data.state.gameStatus);
+        setTransition(data.state.transition);
+        setLoadError('');
+      } catch (err) {
+        setLoadError(err.message || 'Could not load the RLGL arena');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchState();
+    const offReconnect = onReconnect(fetchState);
+    return () => offReconnect();
+  }, []);
+
+  // Fetch my team's name from the backend (own-team endpoint, ownership-enforced).
+  useEffect(() => {
+    if (!teamId) return;
+    let cancelled = false;
+    api
+      .get(`/teams/${teamId}`)
+      .then(({ team: t }) => {
+        if (!cancelled) setTeam(t);
+      })
+      .catch(() => {
+        if (!cancelled) setTeam({ team_id: teamId, team_name: null });
+      });
     return () => {
-      channelRef.current.removeEventListener('message', handleMessage);
+      cancelled = true;
     };
-  }, [isCountdownActive, teamName]);
+  }, [teamId]);
 
-  // Countdown timer effect when Admin triggers state change
+  // Live socket updates (rlgl:state) + my team's result (rlgl:result).
   useEffect(() => {
-    if (!isCountdownActive) return;
-
-    const interval = setInterval(() => {
-      setCountdownVal(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          setIsCountdownActive(false);
-          setGameState(nextState);
-          playSynthSound(nextState === 'RED_LIGHT' ? 'RED' : 'GREEN');
-          return 0;
-        } else {
-          playSynthSound('BEEP_3');
-          return prev - 1;
-        }
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isCountdownActive, nextState]);
-
-  // --- KEYBOARD LISTENER FOR DISQUALIFICATION DURING RED LIGHT ---
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (gameState === 'RED_LIGHT') {
-        setGameState('DISQUALIFIED');
-        setDisqualifyReason(`DISQUALIFIED! Keystroke "${e.key}" detected during RED LIGHT! Team eliminated by rule violation.`);
-        playSynthSound('ELIMINATED');
-      }
+    const offState = onEvent('rlgl:state', ({ state }) => {
+      if (!state) return;
+      setLight(state.light);
+      setRoundStatus(state.gameStatus);
+      setTransition(state.transition);
+    });
+    const offResult = onEvent('rlgl:result', ({ result }) => {
+      if (result && String(result.team_id) === String(teamId)) setMyResult(result);
+    });
+    return () => {
+      offState();
+      offResult();
     };
+  }, [teamId]);
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState]);
+  // When the round first becomes ACTIVE (or the problem first loads), prime
+  // the editor with the starter code. Tracked via a ref so it happens once.
+  const primedRound = useRef(null);
+  useEffect(() => {
+    if (!problem?.starterCode || code !== '') return;
+    const key = `${roundStatus}:${problem.id}`;
+    if (primedRound.current === key) return;
+    primedRound.current = key;
+    setCode(problem.starterCode);
+  }, [roundStatus, problem, code]);
 
-  // --- START GAME & RESET ---
-  const handleStartGame = () => {
-    setUserCode(PROBLEMS[selectedProblemIdx].starterCode);
-    setGameState('GREEN_LIGHT');
-    setIsCountdownActive(false);
-    setTotalRoundTimer(180);
-    setTestResults([]);
-    setDisqualifyReason('');
-    playSynthSound('GREEN');
+  const handleResetCode = () => {
+    if (roundInactive) return;
+    if (problem?.starterCode) setCode(problem.starterCode);
   };
 
-  // --- TOTAL ROUND countdown ---
-  useEffect(() => {
-    if (gameState !== 'GREEN_LIGHT' && gameState !== 'RED_LIGHT') return;
-
-    const interval = setInterval(() => {
-      setTotalRoundTimer(prev => {
-        if (prev <= 1) {
-          setGameState('DISQUALIFIED');
-          setDisqualifyReason('DISQUALIFIED! 180s Round Timer Expired before final submission!');
-          playSynthSound('ELIMINATED');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [gameState]);
-
-  // --- CODE EXECUTION & TEST RUNNER ---
-  const handleRunTests = () => {
-    if (gameState === 'RED_LIGHT' || (isCountdownActive && nextState === 'RED_LIGHT')) {
-      setGameState('DISQUALIFIED');
-      setDisqualifyReason('DISQUALIFIED! Attempted to run tests during RED LIGHT!');
-      playSynthSound('ELIMINATED');
-      return;
-    }
-
+  const handleRunTests = async () => {
+    if (redLight || roundInactive || submitState === 'running') return;
+    setSubmitState('running');
+    setSubmitError('');
+    setTestOutcome(null);
     try {
-      const problem = activeProblem;
-      const userFn = new Function(`
-        ${userCode}
-        return ${problem.fnName};
-      `)();
-
-      let passedCount = 0;
-      const results = problem.testCases.map((tc, idx) => {
-        try {
-          const args = tc.input.map(arg => JSON.parse(arg));
-          const actualOutput = userFn(...args);
-          const expectedParsed = JSON.parse(tc.expected);
-          const isPassed = JSON.stringify(actualOutput) === JSON.stringify(expectedParsed);
-
-          if (isPassed) passedCount++;
-          return {
-            id: idx + 1,
-            input: tc.input.join(', '),
-            expected: tc.expected,
-            actual: JSON.stringify(actualOutput),
-            passed: isPassed
-          };
-        } catch (err) {
-          return {
-            id: idx + 1,
-            input: tc.input.join(', '),
-            expected: tc.expected,
-            actual: `Error: ${err.message}`,
-            passed: false
-          };
-        }
+      const outcome = await api.post('/games/rlgl/submit', { code });
+      setTestOutcome({
+        passed: outcome.passed,
+        passedCount: outcome.passedCount,
+        total: outcome.total,
+        results: outcome.results ?? [],
       });
-
-      setTestResults(results);
-
-      if (passedCount === problem.testCases.length) {
-        const finishTime = 180 - totalRoundTimer;
-        setGameState('VICTORY');
-        playSynthSound('VICTORY');
-
-        const allCompetitors = [
-          { rankName: 'Team 456 (Your Team)', time: `${finishTime}s`, accuracy: '100%' },
-          { rankName: 'Team CyberKnight', time: `${finishTime + 14}s`, accuracy: '95%' },
-          { rankName: 'Team Phoenix Devs', time: `${finishTime + 28}s`, accuracy: '90%' }
-        ];
-        setPodium(allCompetitors);
-      }
+      if (outcome.result) setMyResult(outcome.result);
+      if (outcome.passed) setSubmitState('passed');
+      else setSubmitState('error');
     } catch (err) {
-      setTestResults([{ id: 1, input: 'Syntax Check', expected: 'Valid JS', actual: err.message, passed: false }]);
+      setSubmitError(err.message || 'Submission failed');
+      setSubmitState('error');
+      if (err.code === 'TEAM_DISQUALIFIED') {
+        setMyResult({ status: 'DISQUALIFIED', team_id: teamId });
+      }
     }
   };
 
-  return (
-    <div className={`rlgl-container state-${gameState}`}>
-      {/* --- DOMAINS BANNER --- */}
-      <div className="domain-banner">
-        <div className="round-badge">ROUND 2: OFFLINE NIGHT SURVIVAL & DEBUGGING SESSION</div>
-        <div className="domains-pills">
-          {DOMAINS.slice(0, 6).map((d, i) => (
-            <span key={i} className={`domain-pill ${activeProblem.domain.includes(d) ? 'active' : ''}`}>
-              {d}
-            </span>
-          ))}
+  // ---------------- Rendering ----------------
+
+  if (loading) {
+    return (
+      <div className="rlgl-page">
+        <p className="rlgl-muted">Loading the arena…</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="rlgl-page">
+        <div className="rlgl-state-panel rlgl-state-error">
+          <h1>ARENA UNAVAILABLE</h1>
+          <p>{loadError}</p>
+          <button className="rlgl-btn" onClick={() => window.location.reload()}>
+            Retry
+          </button>
         </div>
       </div>
+    );
+  }
 
-      {/* --- ARENA TOP BANNER / LIGHT STATUS & DOLL --- */}
-      <div className={`arena-status-bar status-${gameState}`}>
-        <div className="status-left-info">
-          <div className={`phase-badge phase-${gameState === 'GREEN_LIGHT' ? 'GREEN' : 'RED'}`}>
-            <span className="phase-indicator-dot" style={{ backgroundColor: gameState === 'GREEN_LIGHT' ? '#00e676' : '#ff1744' }}></span>
-            {gameState === 'GREEN_LIGHT' ? 'GREEN LIGHT (CODE NOW!)' : 'RED LIGHT (STOP CODING!)'}
-          </div>
-          <div className="phase-subtext">
-            {gameState === 'GREEN_LIGHT'
-              ? 'Safe to code & run tests. Type your solution!'
-              : 'HANDS OFF KEYBOARD! Any typing results in instant Round 2 Elimination!'}
-          </div>
+  if (!teamId) {
+    return (
+      <div className="rlgl-page">
+        <div className="rlgl-state-panel">
+          <h1>NO TEAM ASSIGNED</h1>
+          <p>Your account is not linked to a team, so you cannot enter the arena.</p>
         </div>
+      </div>
+    );
+  }
 
-        {/* --- DOLL AVATAR ANIMATION --- */}
-        <div className="doll-stage">
-          <div className="doll-avatar-wrap">
-            <div className={`doll-avatar ${gameState === 'GREEN_LIGHT' ? 'facing-away' : 'facing-forward'}`}>
-              {gameState === 'GREEN_LIGHT' ? (
-                <div className="doll-hair-back"></div>
-              ) : (
-                <div className="doll-face">
-                  <div className="doll-eyes">
-                    <span className="doll-eye"></span>
-                    <span className="doll-eye"></span>
+  const disqualified = myStatus === 'DISQUALIFIED';
+  const finished = myStatus === 'WINNER' || roundStatus === 'COMPLETED';
+
+  return (
+    <div className={`rlgl-page ${redLight ? 'light-red' : 'light-green'}`}>
+      {/* Thin header: brand + team + connection */}
+      <header className="rlgl-topbar">
+        <div className="rlgl-brand">
+          <span className="rlgl-brand-mark">CRAFTVERSE</span>
+          <span className="rlgl-brand-sep">/</span>
+          <span className="rlgl-brand-game">RLGL</span>
+        </div>
+        <div className="rlgl-team">
+          {team && (
+            <>
+              <span className="rlgl-team-id">TEAM {team.team_id}</span>
+              {team.team_name && <span className="rlgl-team-name">{team.team_name}</span>}
+            </>
+          )}
+          <span className={`rlgl-conn ${socketConnected ? 'live' : 'down'}`}>
+            {socketConnected ? '● LIVE' : '○ RECONNECTING'}
+          </span>
+        </div>
+      </header>
+
+      {/* Light state strip — the single most important signal */}
+      <section className={`rlgl-lightbar ${redLight ? 'is-red' : 'is-green'}`}>
+        <div className="rlgl-light-indicator">
+          <span className="rlgl-light-dot" />
+          <span className="rlgl-light-label">
+            {roundStatus === 'ACTIVE'
+              ? redLight
+                ? 'RED LIGHT'
+                : 'GREEN LIGHT'
+              : roundStatus === 'COMPLETED'
+              ? 'ROUND COMPLETE'
+              : 'STAND BY'}
+          </span>
+          {roundStatus === 'ACTIVE' && !disqualified && !finished && (
+            <span className="rlgl-light-hint">{redLight ? 'STOP TYPING' : 'CODE NOW'}</span>
+          )}
+        </div>
+      </section>
+
+      {/* Floating corner countdown — fixed top-right, non-blocking, no modal.
+          Only visible while a transition is genuinely pending (>0s remaining
+          and the light has not yet reached the pending target). */}
+      {transitionPending && (
+        <div className="rlgl-countdown-chip" aria-live="polite">
+          <span className="rlgl-countdown-label">STATE CHANGE IN</span>
+          <span className={`rlgl-countdown-value ${transition.to === 'RED' ? 'to-red' : 'to-green'}`}>
+            {transitionSeconds}s
+          </span>
+        </div>
+      )}
+
+      {disqualified ? (
+        <div className="rlgl-state-panel rlgl-state-disqualified">
+          <h1>DISQUALIFIED</h1>
+          <p>
+            Team {team?.team_name ?? teamId} — you are no longer eligible to
+            participate in this round.
+          </p>
+        </div>
+      ) : finished ? (
+        <div className="rlgl-state-panel rlgl-state-complete">
+          <h1>RLGL COMPLETE</h1>
+          <p>Your team has finished the round.</p>
+          {myStatus === 'WINNER' && (
+            <p className="rlgl-state-ok">Cleared all test cases. Results are final.</p>
+          )}
+        </div>
+      ) : (
+        <main className="rlgl-main">
+          {/* Problem panel */}
+          <aside className="rlgl-problem">
+            {!problem ? (
+              <p className="rlgl-muted">The round problem has not been set yet.</p>
+            ) : (
+              <>
+                <div className="rlgl-problem-head">
+                  <h1 className="rlgl-problem-title">{problem.title}</h1>
+                  <div className="rlgl-problem-meta">
+                    {problem.domain && <span className="rlgl-chip">{problem.domain}</span>}
+                    {problem.difficulty && (
+                      <span className={`rlgl-chip rlgl-chip-${String(problem.difficulty).toLowerCase()}`}>
+                        {problem.difficulty}
+                      </span>
+                    )}
                   </div>
-                  <div className="doll-mouth"></div>
+                </div>
+
+                {problem.description && (
+                  <p className="rlgl-problem-desc">{problem.description}</p>
+                )}
+
+                {problem.testCases?.length > 0 && (
+                  <div className="rlgl-examples">
+                    <h2 className="rlgl-panel-label">EXAMPLES</h2>
+                    {problem.testCases.map((tc, idx) => (
+                      <div key={idx} className="rlgl-example">
+                        <div className="rlgl-example-row">
+                          <span className="rlgl-example-kind">Input</span>
+                          <code>{tc.input.join(', ')}</code>
+                        </div>
+                        <div className="rlgl-example-row">
+                          <span className="rlgl-example-kind">Expected</span>
+                          <code>{tc.expected}</code>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </aside>
+
+          {/* Editor panel */}
+          <section className="rlgl-editor">
+            <div className="rlgl-editor-head">
+              <div className="rlgl-editor-tabs">
+                <span className="rlgl-editor-tab active">solution.js</span>
+              </div>
+              <div className="rlgl-editor-actions">
+                <button
+                  className="rlgl-btn rlgl-btn-ghost"
+                  onClick={handleResetCode}
+                  disabled={roundInactive}
+                >
+                  Reset Code
+                </button>
+                <button
+                  className="rlgl-btn rlgl-btn-run"
+                  onClick={handleRunTests}
+                  disabled={redLight || roundInactive || submitState === 'running'}
+                  title={redLight ? 'Submissions are only accepted during GREEN LIGHT' : 'Run the round test cases'}
+                >
+                  {submitState === 'running'
+                    ? 'RUNNING…'
+                    : redLight
+                    ? 'GREEN LIGHT ONLY'
+                    : 'RUN TESTS'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rlgl-editor-shell">
+              <Editor
+                height="100%"
+                defaultLanguage="javascript"
+                theme="vs-dark"
+                value={code}
+                onChange={(value) => {
+                  setCode(value || '');
+                }}
+                options={{
+                  // Read-only ONLY outside an ACTIVE round (WAITING/COMPLETED).
+                  // During RED the editor stays editable — typing is monitored
+                  // and reported to the backend instead of being blocked.
+                  readOnly: roundInactive,
+                  minimap: { enabled: false },
+                  fontSize: 14,
+                  fontFamily: "'Fira Code', 'Cascadia Code', monospace",
+                  scrollBeyondLastLine: false,
+                }}
+              />
+              {redLight && (
+                <div className="rlgl-red-veil" aria-live="polite">
+                  <span>RED LIGHT — DO NOT TYPE</span>
                 </div>
               )}
             </div>
-            {gameState === 'RED_LIGHT' && <div className="laser-beam"></div>}
-          </div>
-        </div>
 
-        <div className="timer-countdown">
-          <div>CONTROL: <span style={{ fontSize: '1rem', color: '#ff2a70' }}>ADMIN CONTROLLED</span></div>
-          <div style={{ fontSize: '0.9rem', color: '#94a3b8', marginTop: '4px' }}>ROUND TIMER: {totalRoundTimer}s</div>
-        </div>
-      </div>
-
-      {/* --- 3-SECOND WARNING OVERLAY (ADMIN STATE CHANGE) --- */}
-      {isCountdownActive && (
-        <div className="admin-countdown-overlay">
-          <div className="admin-countdown-box">
-            <div className="countdown-warning-title">
-              ⚠️ ADMIN TRIGGERED STATE CHANGE ⚠️
-            </div>
-            <div className="countdown-target-text">
-              SWITCHING TO <strong style={{ color: nextState === 'RED_LIGHT' ? '#ff1744' : '#00e676' }}>{nextState === 'RED_LIGHT' ? 'RED LIGHT (FREEZE!)' : 'GREEN LIGHT (CODE!)'}</strong> IN:
-            </div>
-            <div className="countdown-number-pulse">
-              {countdownVal}
-            </div>
-            <div className="countdown-sub-warning">
-              {nextState === 'RED_LIGHT' ? 'GET READY TO RELEASE KEYBOARD & STOP TYPING!' : 'GET READY TO CODE YOUR SOLUTION!'}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- MAIN GAME GRID (PROJECTOR & CODE EDITOR) --- */}
-      <div className="game-main-grid">
-        {/* --- LEFT PANEL: PROJECTOR & USER SCREEN QUESTION DISPLAY --- */}
-        <div className="screen-panel">
-          <div className="problem-header">
-            <div>
-              <span className="problem-domain-tag">DOMAIN: {activeProblem.domain}</span>
-              <h2 className="problem-title">{activeProblem.title}</h2>
-            </div>
-            <span className={`difficulty-badge difficulty-${activeProblem.difficulty.toLowerCase()}`}>
-              {activeProblem.difficulty}
-            </span>
-          </div>
-
-          <div className="problem-description">
-            {activeProblem.description}
-          </div>
-
-          <div className="problem-examples">
-            <div className="example-title">Projector Test Suite Preview:</div>
-            {activeProblem.testCases.map((tc, idx) => (
-              <div key={idx} className="example-box">
-                <div>Input: <code>{tc.input.join(', ')}</code></div>
-                <div>Expected Output: <code style={{ color: '#00e676' }}>{tc.expected}</code></div>
-              </div>
-            ))}
-          </div>
-
-          {/* Test Execution Output */}
-          <div className="test-suite-card">
-            <div className="test-suite-header">
-              <span>LIVE TEST CASES ({testResults.filter(r => r.passed).length}/{activeProblem.testCases.length} PASSED)</span>
-            </div>
-            {testResults.length === 0 ? (
-              <div style={{ fontSize: '0.85rem', color: '#64748b', fontStyle: 'italic' }}>
-                Click "RUN TESTS" during GREEN LIGHT to evaluate your code.
-              </div>
-            ) : (
-              testResults.map(res => (
-                <div key={res.id} className={`test-item ${res.passed ? 'passed' : 'failed'}`}>
-                  <span>Test #{res.id}: {res.passed ? 'PASSED ✅' : 'FAILED ❌'}</span>
-                  <span>Out: {res.actual}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* --- RIGHT PANEL: CODE EDITOR & RIVAL LEADERBOARD --- */}
-        <div className="editor-panel">
-          <div className="editor-header">
-            <div className="editor-title">
-              <span>💻 CRAFTVERSE SURVIVAL EDITOR</span>
-              {gameState === 'RED_LIGHT' && <span style={{ color: '#ff1744', fontSize: '0.8rem' }}>(FREEZE!)</span>}
-            </div>
-
-            <div className="editor-actions">
-              <button
-                className="btn-editor"
-                onClick={() => setUserCode(activeProblem.starterCode)}
-                disabled={gameState === 'RED_LIGHT' || isCountdownActive}
-              >
-                Reset Code
-              </button>
-              <button
-                className="btn-run"
-                onClick={handleRunTests}
-                disabled={gameState === 'RED_LIGHT' || isCountdownActive}
-              >
-                ▶ RUN TESTS (GREEN ONLY)
-              </button>
-            </div>
-          </div>
-
-          {/* Code Textarea Wrapper with Red Light Warning */}
-          <div className="code-area-wrapper">
-            <Editor
-              height="100%"
-              defaultLanguage="javascript"
-              theme="vs-dark"
-              value={userCode}
-              onChange={(value) => {
-                if (gameState === 'RED_LIGHT') {
-                  setGameState('DISQUALIFIED');
-                  setDisqualifyReason('DISQUALIFIED! Keystroke detected during RED LIGHT phase!');
-                  playSynthSound('ELIMINATED');
-                } else {
-                  setUserCode(value || '');
-                }
-              }}
-              options={{
-                readOnly: gameState === 'RED_LIGHT' || isCountdownActive,
-                minimap: { enabled: false },
-                fontSize: 16,
-              }}
-            />
-            {gameState === 'RED_LIGHT' && (
-              <div className="red-light-overlay">
-                <div className="overlay-text">⚠️ DO NOT TOUCH KEYBOARD! RED LIGHT ACTIVE ⚠️</div>
+            {/* Submission feedback (only shown when the server actually ran tests) */}
+            {(testOutcome || submitError) && (
+              <div className="rlgl-submit-feedback">
+                {testOutcome && (
+                  <>
+                    <div className="rlgl-submit-summary">
+                      <span className={testOutcome.passed ? 'rlgl-pass' : 'rlgl-fail'}>
+                        {testOutcome.passed ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED'}
+                      </span>
+                      <span className="rlgl-muted">
+                        {testOutcome.passedCount}/{testOutcome.total} passed
+                      </span>
+                    </div>
+                    <div className="rlgl-test-list">
+                      {testOutcome.results.map((r) => (
+                        <div key={r.id} className={`rlgl-test-row ${r.passed ? 'pass' : 'fail'}`}>
+                          <span>Test {r.id}</span>
+                          <span>{r.passed ? 'PASSED' : 'FAILED'}</span>
+                          {!r.passed && <code>expected {r.expected}</code>}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {submitError && <p className="rlgl-submit-error">{submitError}</p>}
               </div>
             )}
-          </div>
-        </div>
-      </div>
-
-      {/* --- MODAL 1: PRE_GAME START MODAL --- */}
-      {gameState === 'PRE_GAME' && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-icon">🦑</div>
-            <div className="modal-pccoer-header">PIMPRI CHINCHWAD COLLEGE OF ENGINEERING & RESEARCH (PCCOER)</div>
-            <h2 className="modal-title">CRAFTVERSE HACKATHON</h2>
-            <div className="modal-tagline">PLAY. CODE. SURVIVE.</div>
-
-            <div className="event-rounds-summary">
-              <div className="round-step">ROUND 1: Online PPT Submission (Unstop)</div>
-              <div className="round-step active">ROUND 2: Offline Night Survival (Admin-Controlled Red Light Green Light)</div>
-              <div className="round-step">FINAL ROUND: Code Freeze & Presentation</div>
-            </div>
-
-            <div className="modal-desc">
-              <strong>ADMIN-CONTROLLED SURVIVAL RULES:</strong><br />
-              1. Admin controls state changes via Admin Panel.<br />
-              2. When Admin clicks <strong>CHANGE STATE</strong>, a <strong>3-SECOND COUNTDOWN</strong> will warning display on screen.<br />
-              3. When <strong>RED LIGHT</strong> activates, <strong>STOP TYPING!</strong> Keystrokes result in immediate team disqualification.<br />
-              4. Complete test cases during <strong>GREEN LIGHT</strong> to win the <strong>₹60,000+ Prize Pool</strong>!
-            </div>
-
-            <div style={{ margin: '0.5rem 0' }}>
-              <label style={{ marginRight: '10px', fontSize: '0.9rem', color: '#94a3b8' }}>Select Domain Task:</label>
-              <select
-                value={selectedProblemIdx}
-                onChange={(e) => setSelectedProblemIdx(Number(e.target.value))}
-                style={{
-                  background: '#0a0c10',
-                  color: '#fff',
-                  padding: '0.45rem 0.85rem',
-                  borderRadius: '8px',
-                  border: '1px solid var(--squid-pink)'
-                }}
-              >
-                {PROBLEMS.map((p, idx) => (
-                  <option key={p.id} value={idx}>[{p.domain}] {p.title} ({p.difficulty})</option>
-                ))}
-              </select>
-            </div>
-
-            <button className="btn-start-game" onClick={handleStartGame}>
-              ENTER SURVIVAL ARENA
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* --- MODAL 2: DISQUALIFIED MODAL --- */}
-      {gameState === 'DISQUALIFIED' && (
-        <div className="modal-overlay">
-          <div className="modal-content eliminated-modal">
-            <div className="modal-icon">🛑</div>
-            <h2 className="modal-title">TEAM DISQUALIFIED!</h2>
-            <div className="modal-desc" style={{ color: '#ff88a0', fontWeight: 'bold' }}>
-              {disqualifyReason || 'Disqualified from CraftVerse Round 2!'}
-            </div>
-            <button className="btn-start-game" onClick={handleStartGame}>
-              RETRY SURVIVAL ROUND
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* --- MODAL 3: VICTORY & PODIUM MODAL --- */}
-      {gameState === 'VICTORY' && (
-        <div className="modal-overlay">
-          <div className="modal-content victory-modal">
-            <div className="modal-icon">🏆</div>
-            <h2 className="modal-title">TOP TEAMS ANNOUNCED!</h2>
-            <div className="modal-desc">
-              Congratulations! Your team passed all test cases in Round 2 and qualified for the <strong>₹60,000+ Prize Pool</strong>!
-            </div>
-
-            <div className="podium-list">
-              {podium.map((p, idx) => (
-                <div key={idx} className={`podium-item rank-${idx + 1}`}>
-                  <span>{idx === 0 ? '🥇 1st Place' : idx === 1 ? '🥈 2nd Place' : '🥉 3rd Place'}</span>
-                  <span>{p.rankName}</span>
-                  <span>{p.time} ({p.accuracy})</span>
-                </div>
-              ))}
-            </div>
-
-            <button className="btn-start-game" onClick={handleStartGame}>
-              REPLAY SURVIVAL ROUND
-            </button>
-          </div>
-        </div>
+          </section>
+        </main>
       )}
     </div>
   );

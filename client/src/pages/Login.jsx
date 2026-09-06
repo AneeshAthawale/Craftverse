@@ -7,6 +7,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -17,7 +18,13 @@ export default function LoginPage() {
     setError('');
     try {
       const user = await login(email.trim(), password);
-      navigate(user.role === 'PARTICIPANT' || user.role === 'TEAM' ? '/' : '/admin', { replace: true });
+      const dest =
+        user.role === 'ADMIN' || user.role === 'DEV'
+          ? '/admin'
+          : user.role === 'TEAM'
+            ? '/team'
+            : '/'; // PARTICIPANT
+      navigate(dest, { replace: true });
     } catch (err) {
       setError(err.message || 'Login failed');
     } finally {
@@ -43,15 +50,26 @@ export default function LoginPage() {
           onChange={(e) => setEmail(e.target.value)}
         />
         <label className="login-label" htmlFor="login-password">Password</label>
-        <input
-          id="login-password"
-          className="login-input"
-          type="password"
-          autoComplete="current-password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <div className="login-password-wrap">
+          <input
+            id="login-password"
+            className="login-input"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="current-password"
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button
+            type="button"
+            className="login-password-toggle"
+            onClick={() => setShowPassword((v) => !v)}
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+            aria-pressed={showPassword}
+          >
+            {showPassword ? 'Hide' : 'Show'}
+          </button>
+        </div>
         {error && <p className="login-error">{error}</p>}
         <button className="login-btn" type="submit" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign In'}

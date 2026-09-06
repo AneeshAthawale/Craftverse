@@ -1,11 +1,12 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
+import TeamDashboard from './pages/TeamDashboard';
 import RLGL from './pages/RLGL';
 import Admin from './pages/Admin';
 import RLGLControlPanel from './pages/RLGLControlPanel';
 import Login from './pages/Login';
 import RequireAuth from './components/RequireAuth';
-import { AuthProvider } from './context/AuthProvider.jsx';
+import RequireTeam from './components/RequireTeam';
 import { useAuth } from './context/useAuth.js';
 
 /** UX-only guard: admin pages are for ADMIN/DEV. Backend enforces for real. */
@@ -21,49 +22,57 @@ function RequireAdmin({ children }) {
 
 function App() {
   return (
-    <AuthProvider>
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <Dashboard />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/games/rlgl"
-            element={
-              <RequireAuth>
-                <RLGL />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/admin"
-            element={
-              <RequireAuth>
-                <RequireAdmin>
-                  <Admin />
-                </RequireAdmin>
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/admin/games/rlgl"
-            element={
-              <RequireAuth>
-                <RequireAdmin>
-                  <RLGLControlPanel />
-                </RequireAdmin>
-              </RequireAuth>
-            }
-          />
-        </Routes>
-      </Router>
-    </AuthProvider>
+    <Router>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <Dashboard />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/team"
+          element={
+            <RequireAuth>
+              <RequireTeam>
+                <TeamDashboard />
+              </RequireTeam>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/games/rlgl"
+          element={
+            <RequireAuth>
+              <RLGL />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <Admin />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/games/rlgl"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <RLGLControlPanel />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+      </Routes>
+    </Router>
   );
 }
 

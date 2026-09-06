@@ -145,6 +145,26 @@
   margin-top: 8px;
 }
 
+/* Event Control — status buttons + current-status highlight. */
+.admin-event-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.admin-event-actions .admin-btn:disabled {
+  opacity: 1;
+  cursor: default;
+  background: var(--border);
+  color: var(--text);
+}
+
+.admin-event-status {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+
 .admin-input,
 .admin-btn {
   font-size: 14px;

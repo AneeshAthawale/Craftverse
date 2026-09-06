@@ -19,7 +19,8 @@ async function request(method, path, body) {
     headers: { 'Content-Type': 'application/json' },
   };
 
-  const token = localStorage.getItem('cv_token');
+  // sessionStorage keeps each tab's session independent (tab-scoped JWT).
+  const token = sessionStorage.getItem('cv_token');
   if (token) {
     options.headers.Authorization = `Bearer ${token}`;
   }
@@ -59,10 +60,10 @@ const api = {
   post: (path, body) => request('POST', path, body),
   patch: (path, body) => request('PATCH', path, body),
   del: (path) => request('DELETE', path),
-  // Token helpers for the future auth flow.
-  setToken: (token) => localStorage.setItem('cv_token', token),
-  clearToken: () => localStorage.removeItem('cv_token'),
-  getToken: () => localStorage.getItem('cv_token'),
+  // Tab-scoped session storage: one JWT per browser tab, never shared.
+  setToken: (token) => sessionStorage.setItem('cv_token', token),
+  clearToken: () => sessionStorage.removeItem('cv_token'),
+  getToken: () => sessionStorage.getItem('cv_token'),
 };
 
 export default api;

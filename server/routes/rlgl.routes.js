@@ -1,0 +1,27 @@
+import { Router } from 'express';
+import { requireAuth } from '../middleware/auth.js';
+import { requireRole } from '../middleware/authorize.js';
+import * as rlglController from '../controllers/rlgl.controller.js';
+
+const router = Router();
+
+// Any authenticated user may read the authoritative RLGL state (used by the
+// player page, the admin panel, and reconnect/refresh recovery).
+router.get('/state', requireAuth, rlglController.getState);
+
+// ADMIN/DEV control the light + round lifecycle.
+router.post('/transition', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postTransition);
+router.post('/disqualify/:teamId', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postDisqualifyTeam);
+router.post('/disqualify-all', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postDisqualifyAll);
+router.post('/reinstate/:teamId', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postReinstateTeam);
+router.post('/start-round', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postStartRound);
+router.post('/end-round', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postEndRound);
+
+// Teams submit their own code (team identity comes from the JWT).
+router.post('/submit', requireAuth, requireRole('TEAM', 'PARTICIPANT'), rlglController.postSubmit);
+
+// Teams report a RED-light typing violation (REST fallback for the socket
+// rlgl:violation event; server validates the current light before disqualifying).
+router.post('/violation', requireAuth, requireRole('TEAM', 'PARTICIPANT'), rlglController.postViolation);
+
+export default router;

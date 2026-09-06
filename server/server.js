@@ -1,30 +1,12 @@
-import express from 'express';
-import cors from 'cors';
-import http from 'http';
-import { config } from './config/index.js';
+import { createApp } from './app.js';
 import { pingDb } from './config/db.js';
-import routes from './routes/index.js';
-import { errorHandler, notFoundHandler } from './middleware/error.js';
-import { initSocket } from './sockets/index.js';
+import { config } from './config/index.js';
+import { bindRlglIo, pruneRlglTimers } from './services/rlgl.service.js';
 
-const app = express();
-const server = http.createServer(app);
+const { app, server, io } = createApp();
 
-app.use(cors({ origin: config.clientOrigin }));
-app.use(express.json());
-
-// API routes
-app.use('/api', routes);
-
-// 404 for unknown API routes + centralized error handling
-app.use('/api', notFoundHandler);
-app.use('/api', errorHandler);
-
-// Socket.IO (JWT-authed, room-based)
-const io = initSocket(server);
-app.set('io', io);
-
-const port = config.port;
+// Authoritative RLGL broadcasts need the Socket.IO instance.
+bindRlglIo(io);
 
 async function start() {
   try {
@@ -36,9 +18,18 @@ async function start() {
     process.exit(1);
   }
 
-  server.listen(port, () => {
-    console.log(`[server] CraftVerse API listening on http://localhost:${port}`);
-    console.log(`[server] Socket.IO ready on ws://localhost:${port}`);
+  // Heal any RLGL transition whose deadline passed while the server was down,
+  // and re-arm any still-pending deadline. Skipped when RLGL_PRUNE_ON_BOOT=0
+  // (integration tests build their own app + seed rows per test).
+  if (config.rlglPruneOnBoot !== false) {
+    pruneRlglTimers()
+      .then(() => console.log('[rlgl] Transition timers pruned/re-armed on boot'))
+      .catch((err) => console.error('[rlgl] Boot prune failed (RLGL state heals on next read):', err.message));
+  }
+
+  server.listen(config.port, () => {
+    console.log(`[server] CraftVerse API listening on http://localhost:${config.port}`);
+    console.log(`[server] Socket.IO ready on ws://localhost:${config.port}`);
   });
 }
 

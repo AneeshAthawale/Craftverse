@@ -343,6 +343,18 @@
   border: 1px solid var(--accent-border);
 }
 
+.status-badge.idle {
+  background-color: var(--bg-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.status-badge.idle .status-indicator {
+  background: var(--text-dim);
+  box-shadow: none;
+  animation: none;
+}
+
 .status-indicator {
   width: 8px;
   height: 8px;

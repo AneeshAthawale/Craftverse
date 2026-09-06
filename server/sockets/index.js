@@ -1,6 +1,8 @@
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
+import { registerRlglSockets } from './rlgl.socket.js';
+import { bindRlglIo } from '../services/rlgl.service.js';
 
 /**
  * Socket.IO foundation (plan.md §20).
@@ -14,6 +16,7 @@ import { config } from '../config/index.js';
  * - Event names are the single source of truth for real-time updates.
  */
 export const SOCKET_EVENTS = {
+  // Authoritative hackathon event lifecycle (broadcast by event.controller).
   EVENT_STATUS: 'event:status',
   GAME_STARTED: 'game:started',
   GAME_UPDATED: 'game:updated',
@@ -23,6 +26,11 @@ export const SOCKET_EVENTS = {
   INQUIRY_UPDATED: 'inquiry:updated',
   REGISTRATION_COMPLETED: 'registration:completed',
   FOOD_ACCESS_UPDATED: 'food:access:updated',
+  // RLGL authoritative light state (server-driven countdown/transition).
+  RLGL_STATE: 'rlgl:state',
+  RLGL_RESULT: 'rlgl:result',
+  // Per-connection handshake (informational; not the event lifecycle).
+  SESSION_HELLO: 'session:hello',
 };
 
 export function initSocket(httpServer) {
@@ -58,17 +66,20 @@ export function initSocket(httpServer) {
     if (team_id) socket.join(`team:${team_id}`);
     if (role === 'ADMIN' || role === 'DEV') socket.join('admin');
 
-    socket.emit(SOCKET_EVENTS.EVENT_STATUS, {
+    socket.emit(SOCKET_EVENTS.SESSION_HELLO, {
       status: 'connected',
       role,
       team_id,
       connectedAt: new Date().toISOString(),
     });
-
-    socket.on('disconnect', () => {
-      // Rooms are cleaned up automatically by Socket.IO on disconnect.
-    });
   });
+
+  // RLGL inbound admin control (rlgl:transition) + outbound broadcasts.
+  // Rooms are cleaned up automatically by Socket.IO on disconnect.
+  registerRlglSockets(io);
+  // Authoritative RLGL broadcasts go through this same server instance
+  // (works for both the real server boot and tests that build createApp()).
+  bindRlglIo(io);
 
   return io;
 }

@@ -10,7 +10,7 @@ import Games from '../components/dashboard/Games';
 import FoodQR from '../components/dashboard/FoodQR';
 import Inquiry from '../components/dashboard/Inquiry';
 import api from '../services/api.js';
-import { onEvent, onSocketStatus } from '../services/socket.js';
+import { onEvent, onReconnect, onSocketStatus } from '../services/socket.js';
 import { useAuth } from '../context/useAuth.js';
 import './Dashboard.css';
 
@@ -18,6 +18,7 @@ export default function Dashboard() {
   const { user, logout } = useAuth();
 
   const [profile, setProfile] = useState(null);       // { user, team, participants, registration }
+  const [eventStatus, setEventStatus] = useState(null); // NOT_STARTED | LIVE | BREAK | ENDED
   const [games, setGames] = useState(null);
   const [food, setFood] = useState(null);             // { meal, access }
   const [notifications, setNotifications] = useState([]);
@@ -34,6 +35,24 @@ export default function Dashboard() {
       if (err.status !== 403) setError(err.message || 'Could not load food QR');
     }
   }, []);
+
+  // Authoritative event status (re-fetched on load AND on socket reconnect).
+  const loadEventStatus = useCallback(async () => {
+    try {
+      const data = await api.get('/event/status');
+      setEventStatus(data.event.status);
+    } catch (err) {
+      // Non-fatal — the dashboard still works without the event state.
+      if (err.status !== 401 && err.status !== 403) {
+        setError(err.message || 'Could not load event status');
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    queueMicrotask(loadEventStatus);
+  }, [user, loadEventStatus]);
 
   // Load all dashboard data once the authenticated user is known.
   useEffect(() => {
@@ -87,6 +106,14 @@ export default function Dashboard() {
   // Socket: connection status + real-time events.
   useEffect(() => {
     const offStatus = onSocketStatus(setSocketConnected);
+    const offReconnect = onReconnect(() => {
+      loadEventStatus();
+      loadFood();
+    });
+
+    const offEventStatus = onEvent('event:status', ({ status }) => {
+      setEventStatus(status);
+    });
 
     const offNotif = onEvent('notification:new', ({ notification }) => {
       setNotifications((prev) => [notification, ...prev]);
@@ -106,11 +133,13 @@ export default function Dashboard() {
 
     return () => {
       offStatus();
+      offReconnect();
+      offEventStatus();
       offNotif();
       offInquiry();
       offFood();
     };
-  }, [user, loadFood]);
+  }, [user, loadFood, loadEventStatus]);
 
   // Show a loading state while the auth session or first data load is pending.
   if (!profile && !error) {
@@ -134,9 +163,9 @@ export default function Dashboard() {
         <div className="dashboard-grid">
           {/* Left Column - Primary Information */}
           <div className="dashboard-primary">
-            <EventStatus status={profile?.registration ? 'registered' : 'ongoing'} />
+            <EventStatus eventStatus={eventStatus} />
             <div id="ongoing-event">
-              <OngoingEvent games={games} />
+              <OngoingEvent eventStatus={eventStatus} games={games} />
             </div>
             <EventTimeline />
             <Games games={games} />

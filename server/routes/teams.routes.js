@@ -12,6 +12,9 @@ router.get('/', requireAuth, requireRole('DEV', 'ADMIN'), teamsController.listTe
 // QR access is for organizers + the team itself.
 router.get('/:id/qr', requireAuth, requireRole('DEV', 'ADMIN', 'TEAM'), teamsController.getTeamQr);
 
+// A team's own game results (ownership enforced in the controller).
+router.get('/:id/results', requireAuth, requireRole('DEV', 'ADMIN', 'TEAM', 'PARTICIPANT'), teamsController.getTeamResults);
+
 // Own team details: DEV/ADMIN any team, TEAM/PARTICIPANT only their own.
 router.get('/:id', requireAuth, requireRole('DEV', 'ADMIN', 'TEAM', 'PARTICIPANT'), teamsController.getTeam);
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../services/api.js';
-import { onEvent, onSocketStatus } from '../services/socket.js';
+import { onEvent, onReconnect, onSocketStatus } from '../services/socket.js';
 import { useAuth } from '../context/useAuth.js';
 import './Admin.css';
 
@@ -13,6 +13,7 @@ function fmtTime(iso) {
 }
 
 const NOTIF_TYPES = ['NORMAL', 'IMPORTANT', 'GAME', 'EMERGENCY'];
+const EVENT_STATUSES = ['NOT_STARTED', 'LIVE', 'BREAK', 'ENDED'];
 const GAME_STATUS_META = {
   LIVE: 'live',
   UPCOMING: 'upcoming',
@@ -25,12 +26,17 @@ export default function Admin() {
   const { user, logout, socketConnected } = useAuth();
 
   const [stats, setStats] = useState(null);
+  const [eventStatus, setEventStatus] = useState(null); // NOT_STARTED | LIVE | BREAK | ENDED
   const [teams, setTeams] = useState(null);
   const [participants, setParticipants] = useState(null);
   const [games, setGames] = useState(null);
   const [notifications, setNotifications] = useState(null);
   const [inquiries, setInquiries] = useState(null);
   const [error, setError] = useState('');
+
+  // Event control: which status change is currently in flight + result feedback.
+  const [eventBusy, setEventBusy] = useState(false);
+  const [eventResult, setEventResult] = useState(null); // { ok, message }
 
   // Notification compose form.
   const [notifTitle, setNotifTitle] = useState('');
@@ -49,8 +55,9 @@ export default function Admin() {
   const loadAll = useCallback(async () => {
     setError('');
     try {
-      const [statsRes, teamsRes, partsRes, gamesRes, notifRes, inqRes] = await Promise.all([
+      const [statsRes, eventRes, teamsRes, partsRes, gamesRes, notifRes, inqRes] = await Promise.all([
         api.get('/admin/stats'),
+        api.get('/event/status'),
         api.get('/teams'),
         api.get('/participants'),
         api.get('/games'),
@@ -58,6 +65,7 @@ export default function Admin() {
         api.get('/inquiries'),
       ]);
       setStats(statsRes.stats);
+      setEventStatus(eventRes.event.status);
       setTeams(teamsRes.teams);
       setParticipants(partsRes.participants);
       setGames(gamesRes.games);
@@ -107,6 +115,16 @@ export default function Admin() {
       );
     });
     const offStatus = onSocketStatus(() => {}); // keep socket helper wired
+    // Refetch authoritative state after a socket reconnect (avoids stale UI).
+    const offReconnect = onReconnect(() => {
+      api.get('/event/status')
+        .then((r) => setEventStatus(r.event.status))
+        .catch(() => {});
+    });
+    // Another admin changed the event state — reflect it immediately.
+    const offEventStatus = onEvent('event:status', ({ status }) => {
+      setEventStatus(status);
+    });
 
     return () => {
       offNotif();
@@ -115,6 +133,8 @@ export default function Admin() {
       offGame();
       offReg();
       offStatus();
+      offReconnect();
+      offEventStatus();
     };
   }, []);
 
@@ -135,6 +155,22 @@ export default function Admin() {
       setTimeout(() => setNotifStatus(''), 2500);
     } catch (err) {
       setNotifStatus('error:' + (err.message || 'Could not send'));
+    }
+  };
+
+  const handleSetEventStatus = async (status) => {
+    if (eventBusy || status === eventStatus) return;
+    setEventBusy(true);
+    setEventResult(null);
+    try {
+      const { event } = await api.patch('/event/status', { status });
+      // Reflect the backend-confirmed value (the socket also broadcasts it).
+      setEventStatus(event.status);
+      setEventResult({ ok: true, message: `Event status changed to ${event.status}.` });
+    } catch (err) {
+      setEventResult({ ok: false, message: err.message || 'Could not update event status' });
+    } finally {
+      setEventBusy(false);
     }
   };
 
@@ -233,6 +269,35 @@ export default function Admin() {
       {error && <p className="dash-error">⚠ {error}</p>}
 
       <main className="admin-main">
+        {/* Event Control — authoritative event lifecycle (backend-controlled) */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Event Control</h2>
+          <p className="admin-section-desc">
+            Current Event Status:{' '}
+            <strong className="admin-event-status">{eventStatus ?? 'Loading…'}</strong>
+          </p>
+          <div className="admin-event-actions">
+            {EVENT_STATUSES.map((s) => (
+              <button
+                key={s}
+                className="admin-btn"
+                type="button"
+                disabled={eventBusy || s === eventStatus}
+                onClick={() => handleSetEventStatus(s)}
+              >
+                {s === 'NOT_STARTED' ? 'NOT STARTED' : s}
+              </button>
+            ))}
+          </div>
+          {eventBusy && <p className="admin-ok">Updating event status…</p>}
+          {eventResult && !eventBusy && (
+            <p className={eventResult.ok ? 'admin-ok' : 'admin-err'}>
+              {eventResult.ok ? '✓ ' : '✗ '}
+              {eventResult.message}
+            </p>
+          )}
+        </section>
+
         {/* Stats */}
         <section className="admin-section">
           <h2 className="admin-section-title">Overview</h2>

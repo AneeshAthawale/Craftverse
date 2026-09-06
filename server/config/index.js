@@ -24,4 +24,6 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '12h',
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  // Boot-time RLGL transition healing (set RLGL_PRUNE_ON_BOOT=0 to disable).
+  rlglPruneOnBoot: String(process.env.RLGL_PRUNE_ON_BOOT ?? '1') !== '0',
 };
