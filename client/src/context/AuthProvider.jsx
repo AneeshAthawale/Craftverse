@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { AuthContext } from './AuthContextValue.js';
 import api from '../services/api.js';
-import { connectSocket, disconnectSocket, onSocketStatus } from '../services/socket.js';
+import { connectSocket, disconnectSocket, onSocketStatus, onAuthError } from '../services/socket.js';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -38,6 +38,18 @@ export function AuthProvider({ children }) {
 
   // Track socket connection state for the UI.
   useEffect(() => onSocketStatus(setSocketConnected), []);
+
+  // The socket handshake was rejected (expired/invalid JWT mid-session). Tear
+  // down, clear the session, and let the route guards redirect to /login.
+  useEffect(
+    () =>
+      onAuthError(() => {
+        disconnectSocket();
+        api.clearToken();
+        setUser(null);
+      }),
+    []
+  );
 
   const login = useCallback(async (email, password) => {
     const { token, user } = await api.post('/auth/login', { email, password });

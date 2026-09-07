@@ -34,7 +34,7 @@ const STATUS_COPY = {
   },
 };
 
-export default function EventStatus({ eventStatus }) {
+export default function EventStatus({ eventStatus, socketConnected }) {
   const copy = STATUS_COPY[eventStatus] ?? null;
 
   return (
@@ -53,8 +53,8 @@ export default function EventStatus({ eventStatus }) {
 
       <div className="event-status-body">
         <span className="sys-tag">
-          <span className="dot"></span>
-          SYSTEM ONLINE
+          <span className={`dot ${socketConnected === false ? 'off' : ''}`}></span>
+          {socketConnected === false ? 'SYSTEM OFFLINE' : 'SYSTEM ONLINE'}
         </span>
 
         {copy ? (
@@ -71,7 +71,9 @@ export default function EventStatus({ eventStatus }) {
 
         <div className="event-status-sys">
           <span className="sys-line">SYSTEM STATUS</span>
-          <span className="sys-line ok">OPERATIONAL</span>
+          <span className={`sys-line ${socketConnected === false ? '' : 'ok'}`}>
+            {socketConnected === false ? 'RECONNECTING' : 'OPERATIONAL'}
+          </span>
         </div>
       </div>
     </section>

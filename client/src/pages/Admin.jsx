@@ -83,7 +83,13 @@ export default function Admin() {
   // Socket subscriptions (cleaned up on unmount).
   useEffect(() => {
     const offNotif = onEvent('notification:new', ({ notification }) => {
-      setNotifications((prev) => [notification, ...(prev ?? [])]);
+      setNotifications((prev) => {
+        const list = prev ?? [];
+        // Idempotent: the sender prepends from the POST response, and the
+        // broadcast also reaches this admin's own socket — avoid duplicates.
+        if (list.some((n) => n.notification_id === notification.notification_id)) return list;
+        return [notification, ...list];
+      });
     });
     const offInqNew = onEvent('inquiry:new', ({ inquiry }) => {
       setInquiries((prev) => [inquiry, ...(prev ?? [])]);
@@ -104,22 +110,15 @@ export default function Admin() {
           t.team_id === team.team_id ? { ...t, registration_status: 'REGISTERED', registered_at: team.registered_at } : t
         )
       );
-      setStats((prev) =>
-        prev
-          ? {
-              ...prev,
-              registeredTeams: prev.registeredTeams + 1,
-              pendingTeams: Math.max(0, prev.pendingTeams - 1),
-            }
-          : prev
-      );
+      // Reconcile with the authoritative /admin/stats rather than assuming the
+      // +1/-1 math (a team that was never PENDING would drift the counters).
+      api.get('/admin/stats').then((r) => setStats(r.stats)).catch(() => {});
     });
     const offStatus = onSocketStatus(() => {}); // keep socket helper wired
-    // Refetch authoritative state after a socket reconnect (avoids stale UI).
+    // Refetch ALL authoritative state after a socket reconnect (avoids stale UI
+    // from notifications/inquiries/stats that changed while offline).
     const offReconnect = onReconnect(() => {
-      api.get('/event/status')
-        .then((r) => setEventStatus(r.event.status))
-        .catch(() => {});
+      queueMicrotask(loadAll);
     });
     // Another admin changed the event state — reflect it immediately.
     const offEventStatus = onEvent('event:status', ({ status }) => {
@@ -136,14 +135,14 @@ export default function Admin() {
       offReconnect();
       offEventStatus();
     };
-  }, []);
+  }, [loadAll]);
 
   const handleSendNotification = async (e) => {
     e.preventDefault();
     if (!notifTitle.trim() || !notifMessage.trim()) return;
     setNotifStatus('sending');
     try {
-      await api.post('/notifications', {
+      const { notification } = await api.post('/notifications', {
         type: notifType,
         title: notifTitle.trim(),
         message: notifMessage.trim(),
@@ -151,6 +150,10 @@ export default function Admin() {
       setNotifTitle('');
       setNotifMessage('');
       setNotifType('NORMAL');
+      // Prepend the backend-confirmed notification so the list is correct even
+      // if the socket broadcast is delayed or down (it will not double-add:
+      // the socket path prepends only when THIS admin is not the sender).
+      setNotifications((prev) => [notification, ...(prev ?? [])]);
       setNotifStatus('sent');
       setTimeout(() => setNotifStatus(''), 2500);
     } catch (err) {

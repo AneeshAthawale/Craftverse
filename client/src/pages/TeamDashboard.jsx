@@ -17,6 +17,7 @@ export default function TeamDashboard() {
   const [team, setTeam] = useState(null);            // { team_id, team_name, registration_status, ... }
   const [participants, setParticipants] = useState([]);
   const [results, setResults] = useState(null);      // null = loading; [] = no results
+  const [resultsError, setResultsError] = useState('');
   const [games, setGames] = useState(null);
   const [eventStatus, setEventStatus] = useState(null);
   const [notifications, setNotifications] = useState([]);
@@ -41,9 +42,15 @@ export default function TeamDashboard() {
     try {
       const data = await api.get(`/teams/${teamId}/results`);
       setResults(data.results ?? []);
+      setResultsError('');
     } catch (err) {
-      // Results are optional — don't block the whole dashboard on failure.
-      if (err.status !== 403) setResults([]);
+      // 403 = genuinely no access (should not happen for own team). Any other
+      // failure (network/500) must NOT masquerade as an empty result list.
+      if (err.status === 403) {
+        setResults([]);
+      } else {
+        setResultsError(err.message || 'Could not load results');
+      }
     }
   }, [teamId]);
 
@@ -100,8 +107,18 @@ export default function TeamDashboard() {
   useEffect(() => {
     const offStatus = onSocketStatus(() => {}); // socketConnected comes from AuthProvider
     const offReconnect = onReconnect(() => {
+      // Full resync after a disconnect window — results/notifications/inquiries
+      // may have changed while we were offline.
       loadEventStatus();
       loadGames();
+      loadTeam();
+      loadResults();
+      Promise.all([api.get('/notifications'), api.get('/inquiries/mine')])
+        .then(([notifRes, inqRes]) => {
+          setNotifications(notifRes.notifications);
+          setInquiries(inqRes.inquiries);
+        })
+        .catch((err) => setError(err.message || 'Could not resync dashboard'));
     });
 
     const offEventStatus = onEvent('event:status', ({ status }) => {
@@ -182,7 +199,7 @@ export default function TeamDashboard() {
         <div className="dashboard-grid">
           {/* Left column — event + games */}
           <div className="dashboard-primary">
-            <EventStatus eventStatus={eventStatus} />
+            <EventStatus eventStatus={eventStatus} socketConnected={socketConnected} />
             <div id="ongoing-event">
               <OngoingEvent eventStatus={eventStatus} games={games} />
             </div>
@@ -198,6 +215,8 @@ export default function TeamDashboard() {
               </div>
               {!results ? (
                 <p className="available-soon">Loading results…</p>
+              ) : resultsError ? (
+                <p className="dash-error">⚠ {resultsError}</p>
               ) : results.length === 0 ? (
                 <p className="available-soon">
                   No results recorded for your team yet.

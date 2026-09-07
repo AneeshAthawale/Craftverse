@@ -2,13 +2,15 @@ import { query } from '../config/db.js';
 import { ApiError } from '../utils/ApiError.js';
 
 const SELECT_RESULT = `
-  SELECT result_id, game_id, team_id, rank, score, time_seconds, status,
-         created_at, updated_at
-  FROM game_results`;
+  SELECT gr.result_id, gr.game_id, gr.team_id, gr.rank, gr.score,
+         gr.time_seconds, gr.status, gr.created_at, gr.updated_at,
+         t.team_name
+  FROM game_results gr
+  LEFT JOIN teams t ON t.team_id = gr.team_id`;
 
 export async function getGameResults(gameId) {
   const { rows } = await query(
-    `${SELECT_RESULT} WHERE game_id = $1 ORDER BY rank NULLS LAST, status`,
+    `${SELECT_RESULT} WHERE gr.game_id = $1 ORDER BY gr.rank NULLS LAST, gr.status, gr.team_id`,
     [gameId]
   );
   return rows;

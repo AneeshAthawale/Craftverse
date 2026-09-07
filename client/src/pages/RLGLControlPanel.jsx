@@ -145,6 +145,7 @@ export default function RLGLControlPanel() {
     try {
       await api.post('/games/rlgl/end-round');
       flash(true, 'Round ended.');
+      if (gameId) loadRoster(gameId); // results (winners/disqualified) persist
     } catch (err) {
       flash(false, err.message || 'Could not end the round');
     } finally {

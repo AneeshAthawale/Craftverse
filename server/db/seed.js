@@ -8,18 +8,22 @@
  *  - DEV + ADMIN users
  *  - 3 teams (T01–T03) with registration tokens + TEAM users
  *  - 6 participants (P001–P006) with PARTICIPANT users
- *  - 3 games (RLGL LIVE, Game 2 UPCOMING, Game 3 LOCKED)
+ *  - 3 games (RLGL LIVE/WAITING, Game 2 UPCOMING, Game 3 LOCKED)
  *  - RLGL games.config: the shared round problem + authoritative light state
- *  - RLGL game_results for the 3 seeded teams
+ *  - RLGL game_results seeded PLAYING for the 3 teams (round not yet started)
  *  - One UNUSED food token per participant (Day 1 Lunch)
  *  - 2 notifications, 1 open inquiry
  *
  * Credentials are printed at the end. Tokens are regenerated on each seed run
  * via ON CONFLICT DO UPDATE so re-seeding refreshes them.
+ *
+ * Idempotency: every re-seed produces the same row set. Seed-owned notification
+ * and inquiry rows are deleted first (they have no natural unique key) so a
+ * second run never appends duplicates.
  */
 import bcrypt from 'bcryptjs';
 import { pool } from '../config/db.js';
-import { randomHex, randomToken } from '../utils/token.js';
+import { randomHex } from '../utils/token.js';
 
 // Passwords: DEV + ADMIN share a dev password; TEAM + PARTICIPANT share a
 // participant-facing password. Distinct hashes so each group logs in with its own.
@@ -54,7 +58,10 @@ const RLGL_CONFIG = {
   countdownSeconds: 3,
   state: {
     light: 'GREEN',
-    gameStatus: 'ACTIVE',
+    // WAITING = round not started. The admin starts it from the control panel
+    // (START ROUND -> ACTIVE + resets results). Seeding ACTIVE with pre-baked
+    // final results was internally contradictory.
+    gameStatus: 'WAITING',
     transition: null,
     updatedAt: new Date().toISOString(),
   },
@@ -177,26 +184,30 @@ async function main() {
     }
 
     // ---- RLGL game_results (reused structure; proves plan.md §16) ----
+    // The round is seeded WAITING (not started), so every team is PLAYING with
+    // no rank/score. Final statuses (WINNER/DISQUALIFIED) only appear once the
+    // round actually runs — seeding them on an un-started round was a
+    // contradiction (a "live" game with a finished leaderboard).
     const { rows: gameRows } = await client.query(
       `SELECT game_id FROM games WHERE route = 'rlgl'`
     );
     const rlglGameId = gameRows[0].game_id;
     const results = [
-      { team_id: 'T01', rank: 1, score: 98, time_seconds: 340, status: 'WINNER' },
-      { team_id: 'T02', rank: 2, score: 94, time_seconds: 420, status: 'QUALIFIED' },
-      { team_id: 'T03', rank: null, score: 0, time_seconds: null, status: 'DISQUALIFIED' },
+      { team_id: 'T01', status: 'PLAYING' },
+      { team_id: 'T02', status: 'PLAYING' },
+      { team_id: 'T03', status: 'PLAYING' },
     ];
     for (const r of results) {
       await client.query(
-        `INSERT INTO game_results (game_id, team_id, rank, score, time_seconds, status)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO game_results (game_id, team_id, status)
+         VALUES ($1, $2, $3)
          ON CONFLICT (game_id, team_id) DO UPDATE SET
-           rank = EXCLUDED.rank,
-           score = EXCLUDED.score,
-           time_seconds = EXCLUDED.time_seconds,
+           rank = NULL,
+           score = NULL,
+           time_seconds = NULL,
            status = EXCLUDED.status,
            updated_at = now()`,
-        [rlglGameId, r.team_id, r.rank, r.score, r.time_seconds, r.status]
+        [rlglGameId, r.team_id, r.status]
       );
     }
 
@@ -216,18 +227,28 @@ async function main() {
     }
 
     // ---- Notifications ----
+    // No natural unique key on notifications, so a naive ON CONFLICT DO NOTHING
+    // would append duplicates on every re-seed. The seed owns its demo rows:
+    // clear the exact seed set first, then insert fresh copies.
+    await client.query(
+      `DELETE FROM notifications
+       WHERE title IN ('Red Light Green Light starting soon', 'Lunch is now available')`
+    );
     await client.query(
       `INSERT INTO notifications (type, title, message) VALUES
        ('GAME', 'Red Light Green Light starting soon', 'All teams report to Arena 1. Game starts in 10 minutes.'),
-       ('NORMAL', 'Lunch is now available', 'Day 1 lunch is being served at the food court.')
-       ON CONFLICT DO NOTHING`
+       ('NORMAL', 'Lunch is now available', 'Day 1 lunch is being served at the food court.')`
     );
 
     // ---- Inquiries ----
+    // Same idempotency approach: remove the seed's demo ticket, then re-insert.
+    await client.query(
+      `DELETE FROM inquiries
+       WHERE participant_id = 1 AND team_id = 'T01' AND title = 'Lunch QR missing'`
+    );
     await client.query(
       `INSERT INTO inquiries (participant_id, team_id, title, message, status)
-       VALUES (1, 'T01', 'Lunch QR missing', 'I have not received my lunch QR.', 'OPEN')
-       ON CONFLICT DO NOTHING`
+       VALUES (1, 'T01', 'Lunch QR missing', 'I have not received my lunch QR.', 'OPEN')`
     );
 
     await client.query('COMMIT');

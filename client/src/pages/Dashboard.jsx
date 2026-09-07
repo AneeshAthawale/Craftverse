@@ -59,56 +59,84 @@ export default function Dashboard() {
     if (!user) return;
     let cancelled = false;
 
-    (async () => {
+    const loadAll = async () => {
       try {
-        const [me, gamesRes, notifRes, inqRes] = await Promise.all([
-          api.get('/auth/me'),
-          api.get('/games'),
-          api.get('/notifications'),
-          api.get('/inquiries/mine'),
-        ]);
-
+        // /auth/me is the one load that must succeed for the page to render.
+        const me = await api.get('/auth/me');
         if (cancelled) return;
-
         const authUser = me.user;
+        setProfile({ user: authUser, team: null, participants: [], registration: null });
 
         // Team + registration status (participants need their team name/status).
-        let teamData = null;
         if (authUser.team_id) {
           try {
             const teamRes = await api.get(`/teams/${authUser.team_id}`);
-            teamData = teamRes;
-          } catch {
+            if (!cancelled) {
+              setProfile({
+                user: authUser,
+                team: teamRes.team ?? null,
+                participants: teamRes.participants ?? [],
+                registration: teamRes.team ?? null,
+              });
+            }
+          } catch (err) {
             // Team may be missing in odd cases; continue with what we have.
+            if (!cancelled && err.status !== 403) {
+              setError(err.message || 'Could not load team information');
+            }
           }
         }
 
-        setProfile({
-          user: authUser,
-          team: teamData?.team ?? null,
-          participants: teamData?.participants ?? [],
-          registration: teamData?.team ?? null,
-        });
-        setGames(gamesRes.games);
-        setNotifications(notifRes.notifications);
-        setInquiries(inqRes.inquiries);
+        // The remaining sections are fetched independently so one failure
+        // (e.g. a role-gated 403 on /inquiries/mine for ADMIN/DEV) does not
+        // blank the whole dashboard.
+        const [gamesRes, notifRes, inqRes, foodRes] = await Promise.all([
+          api.get('/games').catch((err) => {
+            if (!cancelled && err.status !== 403) setError(err.message || 'Could not load games');
+            return { games: null };
+          }),
+          api.get('/notifications').catch((err) => {
+            if (!cancelled && err.status !== 403) setError(err.message || 'Could not load notifications');
+            return { notifications: [] };
+          }),
+          api.get('/inquiries/mine').catch(() => ({ inquiries: [] })),
+          api.get('/food/me').catch((err) => {
+            // 403 = no participant link (ADMIN/DEV view) — not an error.
+            if (err.status !== 403 && !cancelled) setError(err.message || 'Could not load food QR');
+            return { meal: null, access: null };
+          }),
+        ]);
+        if (cancelled) return;
+
+        if (gamesRes.games) setGames(gamesRes.games);
+        if (notifRes.notifications) setNotifications(notifRes.notifications);
+        if (inqRes.inquiries) setInquiries(inqRes.inquiries);
+        setFood(foodRes);
       } catch (err) {
         if (!cancelled) setError(err.message || 'Could not load dashboard data');
       }
-    })();
+    };
 
-    queueMicrotask(loadFood);
+    loadAll();
     return () => {
       cancelled = true;
     };
-  }, [user, loadFood]);
+  }, [user]);
 
   // Socket: connection status + real-time events.
   useEffect(() => {
     const offStatus = onSocketStatus(setSocketConnected);
     const offReconnect = onReconnect(() => {
+      // Full resync after a disconnect window: notifications/inquiries/games
+      // may have changed while we were offline. Each fetch is isolated so a
+      // role-gated 403 (ADMIN/DEV on participant endpoints) cannot blank the
+      // sections that did load.
+      if (!user) return;
       loadEventStatus();
       loadFood();
+      api.get('/games').then((r) => setGames(r.games)).catch(() => {});
+      api.get('/notifications').then((r) => setNotifications(r.notifications)).catch(() => {});
+      api.get('/inquiries/mine').then((r) => setInquiries(r.inquiries)).catch(() => {});
     });
 
     const offEventStatus = onEvent('event:status', ({ status }) => {
@@ -163,7 +191,7 @@ export default function Dashboard() {
         <div className="dashboard-grid">
           {/* Left Column - Primary Information */}
           <div className="dashboard-primary">
-            <EventStatus eventStatus={eventStatus} />
+            <EventStatus eventStatus={eventStatus} socketConnected={socketConnected} />
             <div id="ongoing-event">
               <OngoingEvent eventStatus={eventStatus} games={games} />
             </div>

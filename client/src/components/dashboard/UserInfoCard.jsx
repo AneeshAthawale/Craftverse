@@ -14,12 +14,15 @@ export default function UserInfoCard({ profile }) {
     participants.find((p) => p.participant_id === authUser.participant_id) ?? null;
   const name = member?.name ?? (authUser.email ? authUser.email.split('@')[0] : '—');
 
+  const regStatus = team.registration_status;
+  // Only a backend-confirmed REGISTERED/UNREGISTERED renders a chip; anything
+  // missing/unknown must never claim the team is Registered.
   const status =
-    team.registration_status === 'REGISTERED'
+    regStatus === 'REGISTERED'
       ? 'Registered'
-      : team.registration_status === 'UNREGISTERED'
+      : regStatus === 'UNREGISTERED'
         ? 'Pending Registration'
-        : 'Registered';
+        : null;
 
   return (
     <section className="dashboard-section">
@@ -51,9 +54,13 @@ export default function UserInfoCard({ profile }) {
 
         <div className="user-info-row">
           <span className="user-info-label">Status</span>
-          <span className={`status-registered ${team.registration_status === 'UNREGISTERED' ? 'status-pending' : ''}`}>
-            {status}
-          </span>
+          {status ? (
+            <span className={`status-registered ${regStatus === 'UNREGISTERED' ? 'status-pending' : ''}`}>
+              {status}
+            </span>
+          ) : (
+            <span className="user-info-value">—</span>
+          )}
         </div>
       </div>
     </section>

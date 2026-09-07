@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Editor } from '@monaco-editor/react';
 import api from '../services/api.js';
 import { onEvent, onReconnect, getSocket } from '../services/socket.js';
@@ -82,8 +82,7 @@ export default function RLGL() {
   // and is the sole authority on disqualification. We do NOT require a locally
   // known result — a fresh page load has none until rlgl:result arrives, and
   // the backend still has the authoritative row.
-  const reportViolation = useRef(async () => {});
-  reportViolation.current = async () => {
+  const reportViolation = useCallback(async () => {
     if (!redLight || roundStatus !== 'ACTIVE') return;
     if (myStatus === 'DISQUALIFIED' || myStatus === 'WINNER') return;
     if (violationSent.current) return;
@@ -102,7 +101,7 @@ export default function RLGL() {
         violationSent.current = false; // failed — allow retry
       }
     }
-  };
+  }, [redLight, roundStatus, myStatus, violationSent]);
   useEffect(() => {
     const onKeyDown = (e) => {
       const target = e.target;
@@ -115,15 +114,21 @@ export default function RLGL() {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta' || e.key === 'CapsLock') return;
       if (e.key.length === 1 || ['Backspace', 'Delete', 'Enter', 'Tab', 'Space'].includes(e.key)) {
-        e.preventDefault();
-        reportViolation.current();
+        // NOTE: deliberately NO preventDefault() here. The keystroke must keep
+        // flowing into Monaco so the player can type in every state (GREEN,
+        // countdown, and RED). RED LIGHT detection reports the activity to the
+        // backend; it must never swallow the input.
+        reportViolation();
       }
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [redLight, roundStatus, myStatus, violationSent]);
+  }, [reportViolation]);
 
-  // Load authoritative state on mount + after every reconnect.
+  // Load authoritative state on mount + after every reconnect. /state now also
+  // returns the caller's own result row, so a refresh during DISQUALIFIED /
+  // WINNER restores the correct panel instead of showing a stale editor.
+  const prevGameStatus = useRef(null);
   useEffect(() => {
     const fetchState = async () => {
       try {
@@ -132,6 +137,8 @@ export default function RLGL() {
         setLight(data.state.light);
         setRoundStatus(data.state.gameStatus);
         setTransition(data.state.transition);
+        if (data.result) setMyResult(data.result);
+        prevGameStatus.current = data.state.gameStatus;
         setLoadError('');
       } catch (err) {
         setLoadError(err.message || 'Could not load the RLGL arena');
@@ -165,9 +172,19 @@ export default function RLGL() {
   useEffect(() => {
     const offState = onEvent('rlgl:state', ({ state }) => {
       if (!state) return;
+      const prev = prevGameStatus.current;
+      prevGameStatus.current = state.gameStatus;
       setLight(state.light);
       setRoundStatus(state.gameStatus);
       setTransition(state.transition);
+      // A genuine round restart (START ROUND: non-ACTIVE -> ACTIVE) resets every
+      // team's result to PLAYING server-side but emits no per-team rlgl:result.
+      // Drop a terminal result (WINNER/DISQUALIFIED) held from the previous
+      // round so the editor returns. A light flip within an ACTIVE round keeps
+      // the current result (a live DQ must not vanish).
+      if (state.gameStatus === 'ACTIVE' && prev !== 'ACTIVE') {
+        setMyResult(null);
+      }
     });
     const offResult = onEvent('rlgl:result', ({ result }) => {
       if (result && String(result.team_id) === String(teamId)) setMyResult(result);
@@ -195,7 +212,9 @@ export default function RLGL() {
   };
 
   const handleRunTests = async () => {
-    if (redLight || roundInactive || submitState === 'running') return;
+    // Submitting is a deliberate click, NOT typing, so it is allowed during
+    // both GREEN and RED while the round is ACTIVE (the backend re-validates).
+    if (roundInactive || submitState === 'running') return;
     setSubmitState('running');
     setSubmitError('');
     setTestOutcome(null);
@@ -388,14 +407,10 @@ export default function RLGL() {
                 <button
                   className="rlgl-btn rlgl-btn-run"
                   onClick={handleRunTests}
-                  disabled={redLight || roundInactive || submitState === 'running'}
-                  title={redLight ? 'Submissions are only accepted during GREEN LIGHT' : 'Run the round test cases'}
+                  disabled={roundInactive || submitState === 'running'}
+                  title="Run the round test cases against your code"
                 >
-                  {submitState === 'running'
-                    ? 'RUNNING…'
-                    : redLight
-                    ? 'GREEN LIGHT ONLY'
-                    : 'RUN TESTS'}
+                  {submitState === 'running' ? 'RUNNING…' : 'RUN TESTS'}
                 </button>
               </div>
             </div>

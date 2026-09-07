@@ -17,9 +17,14 @@ import { ApiError } from '../utils/ApiError.js';
 import * as rlglService from '../services/rlgl.service.js';
 import { LIGHTS, GAME_STATUSES } from '../services/rlgl.service.js';
 
-/** GET /api/games/rlgl/state — public gameplay config + authoritative state. */
+/**
+ * GET /api/games/rlgl/state — public gameplay config + authoritative state.
+ * When the caller belongs to a team, the response also includes their own
+ * game_results row so a player page refresh/reconnect restores DISQUALIFIED /
+ * WINNER status instead of showing a stale "playing" editor.
+ */
 export const getState = asyncHandler(async (req, res) => {
-  const state = await rlglService.getRlglPublicState();
+  const state = await rlglService.getRlglPublicState(req.user.team_id ?? null);
   res.json(state);
 });
 
@@ -89,18 +94,17 @@ export const postReinstateTeam = asyncHandler(async (req, res) => {
   res.json({ result });
 });
 
-/** POST /api/games/rlgl/start-round — activate + reset results for a fresh round. */
+/** POST /api/games/rlgl/start-round — ACTIVE + GREEN + reset results. */
 export const postStartRound = asyncHandler(async (req, res) => {
-  const state = await rlglService.setGameStatus('ACTIVE');
-  await rlglService.resetRlglResults();
+  const { state, resetCount } = await rlglService.startRound();
   const io = req.app.get('io');
   if (io) io.emit('rlgl:state', { gameId: state.gameId, state });
-  res.json({ state });
+  res.json({ state, resetCount });
 });
 
-/** POST /api/games/rlgl/end-round — mark the round complete. */
+/** POST /api/games/rlgl/end-round — mark the round COMPLETED. */
 export const postEndRound = asyncHandler(async (req, res) => {
-  const state = await rlglService.setGameStatus('COMPLETED');
+  const { state } = await rlglService.endRound();
   const io = req.app.get('io');
   if (io) io.emit('rlgl:state', { gameId: state.gameId, state });
   res.json({ state });

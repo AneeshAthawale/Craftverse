@@ -135,11 +135,14 @@ export async function getRlglState() {
   return config.state;
 }
 
-/** Public read: gameplay config + state + game metadata (no per-team data). */
-export async function getRlglPublicState() {
+/** Public read: gameplay config + state + game metadata (no per-team data).
+ *  When `teamId` is supplied, also returns that team's own result row so a
+ *  player page refresh/reconnect restores its true status (PLAYING/DQ/WINNER). */
+export async function getRlglPublicState(teamId = null) {
   const row = await getRlglRow();
   const config = normalizeConfig(row.config);
   const state = await getRlglState();
+  const result = teamId ? ((await getResult(row.game_id, teamId)) ?? null) : undefined;
   return {
     gameId: String(row.game_id),
     name: row.name,
@@ -147,6 +150,7 @@ export async function getRlglPublicState() {
     countdownSeconds: config.countdownSeconds,
     problem: config.problem ?? null,
     state,
+    ...(result ? { result } : {}),
   };
 }
 
@@ -318,25 +322,71 @@ export async function broadcastState(gameId, state) {
 // Game lifecycle helpers (admin-controlled round start/end)
 // ---------------------------------------------------------------------------
 
+/** Cancel any armed timer for a game (round end/status change, boot prune). */
+function clearTimer(gameId) {
+  const existing = schedulers.get(gameId);
+  if (existing) {
+    clearTimeout(existing);
+    schedulers.delete(gameId);
+  }
+}
+
 /** Set gameStatus (WAITING/ACTIVE/COMPLETED). Clears any pending transition. */
 export async function setGameStatus(status) {
   const row = await getRlglRow();
   const config = normalizeConfig(row.config);
   const next = { ...config.state, gameStatus: status, transition: null };
   const saved = await updateConfig(next);
+  // A status change (END ROUND / START ROUND) supersedes any armed countdown —
+  // cancel the in-process timer so it cannot fire against the new round.
+  clearTimer(row.game_id);
   return saved.config.state;
+}
+
+/**
+ * Start (or restart) the round. Admin-only (route + socket guard).
+ * - Forces gameStatus ACTIVE, light GREEN, clears any pending transition.
+ * - Resets every team's RLGL result back to PLAYING so the previous round's
+ *   winners/disqualifications never leak into the new round.
+ * Returns { state, resetCount }.
+ */
+export async function startRound() {
+  const row = await getRlglRow();
+  const config = normalizeConfig(row.config);
+  const next = {
+    ...config.state,
+    gameStatus: 'ACTIVE',
+    light: 'GREEN',
+    transition: null,
+  };
+  const saved = await updateConfig(next);
+  // A restart supersedes any armed countdown from the previous round.
+  clearTimer(row.game_id);
+  const { resetCount } = await resetRlglResults();
+  return { state: saved.config.state, resetCount };
+}
+
+/**
+ * End the round. Admin-only. Marks the game COMPLETED and clears any pending
+ * transition. After this, typing violations and submits are rejected by the
+ * service (GAME_NOT_ACTIVE), and every client shows the ended state.
+ */
+export async function endRound() {
+  const state = await setGameStatus('COMPLETED');
+  return { state };
 }
 
 /** Reset every team's RLGL result back to PLAYING (round start / replay). */
 export async function resetRlglResults() {
-  const row = await getRlglRow();
-  const { rowCount } = await query(
-    `UPDATE game_results SET rank = NULL, score = NULL, time_seconds = NULL,
-            status = 'PLAYING', updated_at = now()
-     WHERE game_id = $1`,
-    [row.game_id]
+  const { rows } = await query(
+    `UPDATE game_results gr
+     SET rank = NULL, score = NULL, time_seconds = NULL,
+         status = 'PLAYING', updated_at = now()
+     FROM games g
+     WHERE g.route = $1 AND gr.game_id = g.game_id`,
+    [RLGL_ROUTE]
   );
-  return { gameId: String(row.game_id), resetCount: rowCount };
+  return { resetCount: rows.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -415,16 +465,18 @@ export async function disqualifyTeam(teamId) {
 export async function disqualifyAllTeams() {
   const row = await getRlglRow();
   const { rows } = await query(
-    `UPDATE game_results
+    `UPDATE game_results gr
      SET status = 'DISQUALIFIED', updated_at = now()
-     WHERE game_id = $1 AND status IN ('PLAYING', 'QUALIFIED')
-     RETURNING result_id, game_id, team_id, rank, score, time_seconds, status,
-               created_at, updated_at`,
-    [row.game_id]
+     FROM games g
+     WHERE g.route = $1 AND gr.game_id = g.game_id
+       AND gr.status IN ('PLAYING', 'QUALIFIED')
+     RETURNING gr.result_id, gr.game_id, gr.team_id, gr.rank, gr.score,
+               gr.time_seconds, gr.status, gr.created_at, gr.updated_at`,
+    [RLGL_ROUTE]
   );
   const results = rows.map(normalizeResult);
   for (const result of results) emitTeamResult(row.game_id, result.team_id, result);
-  return { gameId: String(row.game_id), disqualifiedCount: rows.length };
+  return { gameId: String(row.game_id), disqualifiedCount: results.length };
 }
 
 /** Admin: reinstate a team to PLAYING (undo a mistaken disqualification). */
@@ -440,36 +492,94 @@ export async function reinstateTeam(teamId) {
  *
  * Called from the rlgl:violation socket handler and the POST /violation route
  * — both authenticate the caller, so `teamId` always comes from the JWT, never
- * from a client payload. The team identity and the CURRENT authoritative light
- * are validated here: a violation only disqualifies when the round is ACTIVE
- * and the light is actually RED (typing during the countdown is legal because
- * the old light is still in effect). Disqualification is idempotent — a second
- * report for an already-DISQUALIFIED team is a no-op, not an error.
+ * from a client payload. Runs inside a transaction with the RLGL row locked
+ * (`SELECT ... FOR UPDATE`): the authoritative light is re-read under the lock
+ * and the disqualification is written exactly once, so two concurrent reports
+ * (e.g. two participants of the same team typing at the same instant) cannot
+ * double-record or double-broadcast. Typing during a pending countdown is legal
+ * because the OLD light is still authoritative until the deadline passes.
  *
  * Returns { ok, reason?, result? }.
  */
 export async function reportRedLightViolation(teamId) {
-  const row = await getRlglRow();
-  const state = await getRlglState(); // heals an expired transition before judging
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT game_id, config FROM games WHERE route = $1 FOR UPDATE`,
+      [RLGL_ROUTE]
+    );
+    const row = rows[0];
+    if (!row) {
+      await client.query('ROLLBACK');
+      throw ApiError.notFound('RLGL game not found');
+    }
+    const config = normalizeConfig(row.config);
+    const state = config.state;
 
-  if (state.gameStatus !== 'ACTIVE') {
-    return { ok: false, reason: 'GAME_NOT_ACTIVE' };
-  }
-  if (state.light !== 'RED') {
-    return { ok: false, reason: 'NOT_RED' }; // countdown still on the old light
-  }
+    // Healing read under the lock: if a persisted deadline already passed,
+    // apply it before judging (keeps the light authoritative even when a
+    // violation arrives exactly at the flip boundary).
+    let current = state;
+    if (state.transition && Date.now() >= state.transition.appliesAt) {
+      const healed = {
+        ...state,
+        light: state.transition.to,
+        transition: null,
+      };
+      await client.query('UPDATE games SET config = $1, updated_at = now() WHERE game_id = $2', [
+        JSON.stringify({ ...config, state: { ...healed, updatedAt: new Date().toISOString() } }),
+        row.game_id,
+      ]);
+      current = healed;
+    }
 
-  const existing = await getResult(row.game_id, teamId);
-  if (existing?.status === 'DISQUALIFIED') {
-    return { ok: false, reason: 'ALREADY_DISQUALIFIED', result: existing };
-  }
-  if (existing?.status === 'WINNER') {
-    return { ok: false, reason: 'TEAM_ALREADY_FINISHED', result: existing };
-  }
+    if (current.gameStatus !== 'ACTIVE') {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'GAME_NOT_ACTIVE' };
+    }
+    if (current.light !== 'RED') {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'NOT_RED' }; // countdown still on the old light
+    }
 
-  const result = await upsertResult(row.game_id, teamId, { status: 'DISQUALIFIED' });
-  emitTeamResult(row.game_id, teamId, result);
-  return { ok: true, result };
+    // Idempotency: only PLAYING/QUALIFIED/absent rows may be disqualified.
+    const { rows: existing } = await client.query(
+      `SELECT result_id, game_id, team_id, rank, score, time_seconds, status,
+              created_at, updated_at
+       FROM game_results WHERE game_id = $1 AND team_id = $2 FOR UPDATE`,
+      [row.game_id, teamId]
+    );
+    const prev = normalizeResult(existing[0] || null);
+    if (prev?.status === 'DISQUALIFIED') {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'ALREADY_DISQUALIFIED', result: prev };
+    }
+    if (prev?.status === 'WINNER') {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'TEAM_ALREADY_FINISHED', result: prev };
+    }
+
+    const { rows: upserted } = await client.query(
+      `INSERT INTO game_results (game_id, team_id, rank, score, time_seconds, status)
+       VALUES ($1, $2, NULL, NULL, NULL, 'DISQUALIFIED')
+       ON CONFLICT (game_id, team_id) DO UPDATE SET
+         status = 'DISQUALIFIED', updated_at = now()
+       RETURNING result_id, game_id, team_id, rank, score, time_seconds, status,
+                 created_at, updated_at`,
+      [row.game_id, teamId]
+    );
+    await client.query('COMMIT');
+
+    const result = normalizeResult(upserted[0]);
+    emitTeamResult(row.game_id, teamId, result);
+    return { ok: true, result };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -522,32 +632,24 @@ export function runProblemTestCases(problem, code) {
 /**
  * Handle a team's submit during an ACTIVE game.
  * - Team identity comes from the JWT (req.user), never from the body.
- * - Blocks submits while RED or when the team is already DISQUALIFIED/WINNER.
+ * - Submitting is a deliberate click, NOT typing, so it is allowed in BOTH
+ *   GREEN and RED while the round is ACTIVE. The only rejections are an
+ *   inactive round, a missing problem, and an already DISQUALIFIED/WINNER team.
  * - On full pass: upserts WINNER (score 100, time_seconds = elapsed since the
- *   light state was last updated) and emits to the team room.
+ *   round reached ACTIVE) and emits to the team room. The existing-row check
+ *   and the WINNER upsert run under a row lock so two concurrent submits from
+ *   the same team cannot both claim the win.
  * Returns { passed, results, result, state }.
  */
 export async function submitSolution({ teamId, code }) {
   const row = await getRlglRow();
   const config = normalizeConfig(row.config);
-  const state = await getRlglState(); // heals an expired transition before judging
 
-  if (state.gameStatus !== 'ACTIVE') {
+  if (config.state.gameStatus !== 'ACTIVE') {
     throw ApiError.conflict('Game is not active', 'GAME_NOT_ACTIVE');
   }
   if (!config.problem) {
     throw ApiError.conflict('No problem configured for this round', 'NO_PROBLEM');
-  }
-
-  const existing = await getResult(row.game_id, teamId);
-  if (existing?.status === 'DISQUALIFIED') {
-    throw ApiError.conflict('Team is disqualified from this round', 'TEAM_DISQUALIFIED');
-  }
-  if (existing?.status === 'WINNER') {
-    throw ApiError.conflict('Team has already finished this round', 'TEAM_ALREADY_FINISHED');
-  }
-  if (state.light !== 'GREEN') {
-    throw ApiError.conflict('Submissions are only accepted during GREEN LIGHT', 'RED_LIGHT');
   }
 
   const results = runProblemTestCases(config.problem, code);
@@ -555,20 +657,56 @@ export async function submitSolution({ teamId, code }) {
   const allPassed = passedCount === results.length && results.length > 0;
 
   // A failed submit changes nothing — result stays null so the client knows no
-  // row was written by THIS attempt (the existing row is still visible via
-  // GET /api/games/rlgl/state for the team).
+  // row was written by THIS attempt.
   let result = null;
   if (allPassed) {
-    const startedAt = new Date(state.updatedAt).getTime();
-    const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-    result = await upsertResult(row.game_id, teamId, {
-      status: 'WINNER',
-      score: 100,
-      time_seconds: elapsedSeconds,
-    });
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const { rows: existing } = await client.query(
+        `SELECT status FROM game_results WHERE game_id = $1 AND team_id = $2 FOR UPDATE`,
+        [row.game_id, teamId]
+      );
+      if (existing[0]?.status === 'DISQUALIFIED') {
+        await client.query('ROLLBACK');
+        throw ApiError.conflict('Team is disqualified from this round', 'TEAM_DISQUALIFIED');
+      }
+      if (existing[0]?.status === 'WINNER') {
+        await client.query('ROLLBACK');
+        throw ApiError.conflict('Team has already finished this round', 'TEAM_ALREADY_FINISHED');
+      }
+
+      // Elapsed time is measured from when the current round became ACTIVE.
+      // Read from the already-loaded config (never re-query inside the open
+      // transaction — the RLGL row is locked by this client).
+      const startedAt = new Date(config.state.updatedAt).getTime();
+      const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+
+      const { rows: upserted } = await client.query(
+        `INSERT INTO game_results (game_id, team_id, rank, score, time_seconds, status)
+         VALUES ($1, $2, NULL, 100, $3, 'WINNER')
+         ON CONFLICT (game_id, team_id) DO UPDATE SET
+           rank = EXCLUDED.rank,
+           score = EXCLUDED.score,
+           time_seconds = EXCLUDED.time_seconds,
+           status = EXCLUDED.status,
+           updated_at = now()
+         RETURNING result_id, game_id, team_id, rank, score, time_seconds, status,
+                   created_at, updated_at`,
+        [row.game_id, teamId, elapsedSeconds]
+      );
+      await client.query('COMMIT');
+      result = normalizeResult(upserted[0]);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
     emitTeamResult(row.game_id, teamId, result);
   }
 
+  const state = await getRlglState();
   return {
     passed: allPassed,
     passedCount,

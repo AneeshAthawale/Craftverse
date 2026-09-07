@@ -36,7 +36,9 @@ export default function Inquiry({ initial, onSubmitted }) {
         title: trimmedTitle,
         message: trimmedMessage,
       });
-      setInquiries((prev) => [inquiry, ...prev]);
+      // The parent owns the list (it prepends via onSubmitted and receives
+      // inquiry:updated over the socket) — do NOT also prepend locally or the
+      // inquiry appears twice.
       onSubmitted?.(inquiry);
       setTitle('');
       setMessage('');

@@ -481,13 +481,37 @@ test('socket: non-admin cannot emit rlgl:transition', async () => {
 
 // ----------------------------------------------------------- submit ------
 
-test('submit during RED LIGHT is rejected with 409', async () => {
+test('submit during RED LIGHT is allowed and can produce a WINNER (submit is a click, not typing)', async () => {
   const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
   await seedResult(gameId, 'T01', 'PLAYING');
 
   const { status, data } = await postSubmit('team', PROBLEM.starterCode);
-  assert.equal(status, 409);
-  assert.equal(data.error.code, 'RED_LIGHT');
+  assert.equal(status, 200);
+  assert.equal(data.passed, true);
+  assert.equal(data.result.status, 'WINNER');
+  assert.equal(data.result.team_id, 'T01');
+
+  const { rows } = await pool.query(
+    'SELECT status FROM game_results WHERE game_id = $1 AND team_id = $2',
+    [gameId, 'T01']
+  );
+  assert.equal(rows[0].status, 'WINNER');
+});
+
+test('a WINNER team is not disqualified by a later RED-light violation', async () => {
+  const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
+  await seedResult(gameId, 'T01', 'WINNER');
+
+  const { status, data } = await postViolation('team');
+  assert.equal(status, 200);
+  assert.equal(data.ok, false);
+  assert.equal(data.reason, 'TEAM_ALREADY_FINISHED');
+
+  const { rows } = await pool.query(
+    'SELECT status FROM game_results WHERE game_id = $1 AND team_id = $2',
+    [gameId, 'T01']
+  );
+  assert.equal(rows[0].status, 'WINNER');
 });
 
 test('submit with a correct solution during GREEN upserts WINNER and emits rlgl:result to the team room', async () => {
@@ -696,4 +720,175 @@ test('ADMIN cannot report a violation (403) — role guard stays authoritative',
   await seedRlgl(makeConfig({ light: 'RED' }));
   const { status } = await postViolation('admin');
   assert.equal(status, 403);
+});
+
+// ------------------------------------------------------ lifecycle ------
+
+/** POST an admin lifecycle action (/start-round, /end-round). */
+async function postLifecycle(role, action) {
+  const res = await fetch(`${baseUrl}/games/rlgl/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth(signToken(FIXTURES[role])) },
+  });
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
+
+test('start-round sets ACTIVE + GREEN, resets prior results, and broadcasts rlgl:state', async () => {
+  // Seed a finished round: COMPLETED with a WINNER + DISQUALIFIED row.
+  const gameId = await seedRlgl(makeConfig({ gameStatus: 'COMPLETED', light: 'RED' }));
+  await seedResult(gameId, 'T01', 'WINNER');
+  await seedResult(gameId, 'T02', 'DISQUALIFIED');
+
+  const [participantSocket] = await Promise.all([connectSocket('participant')]);
+  try {
+    const statePromise = once(participantSocket, 'rlgl:state');
+    const { status, data } = await postLifecycle('admin', 'start-round');
+    assert.equal(status, 200);
+    assert.equal(data.state.gameStatus, 'ACTIVE');
+    assert.equal(data.state.light, 'GREEN');
+    assert.equal(data.state.transition, null);
+
+    const evt = await statePromise;
+    assert.equal(evt.state.gameStatus, 'ACTIVE');
+    assert.equal(evt.state.light, 'GREEN');
+
+    // Results reset to PLAYING — a previous WINNER/DQ never leaks in.
+    const { rows } = await pool.query(
+      'SELECT team_id, status FROM game_results WHERE game_id = $1 ORDER BY team_id',
+      [gameId]
+    );
+    assert.deepEqual(
+      rows.map((r) => [r.team_id, r.status]),
+      [
+        ['T01', 'PLAYING'],
+        ['T02', 'PLAYING'],
+      ]
+    );
+  } finally {
+    participantSocket.disconnect();
+  }
+});
+
+test('a refresh after WINNER + end-round + start-round returns the reset PLAYING result, not the stale WINNER', async () => {
+  // Regression: the player page clears its held WINNER/DISQUALIFIED result when
+  // a new round starts. The server contract it relies on is that /state (what a
+  // refresh fetches) returns the reset row — never the previous round's result.
+  const gameId = await seedRlgl(makeConfig({ gameStatus: 'COMPLETED', light: 'RED' }));
+  await seedResult(gameId, 'T01', 'WINNER');
+  await seedResult(gameId, 'T02', 'DISQUALIFIED');
+
+  // Simulate: refresh DURING the completed round shows the terminal result...
+  const before = await getState('team');
+  assert.equal(before.data.result.status, 'WINNER');
+
+  // ...then the admin starts a fresh round.
+  await postLifecycle('admin', 'start-round');
+
+  // A refresh after the restart must show PLAYING (or no row), never WINNER.
+  const after = await getState('team');
+  assert.equal(after.data.state.gameStatus, 'ACTIVE');
+  assert.equal(after.data.result.status, 'PLAYING');
+  assert.equal(after.data.result.score, null);
+  assert.ok(gameId);
+});
+
+test('end-round marks COMPLETED, clears a pending transition, and stops violations/submits', async () => {
+  const gameId = await seedRlgl(makeConfig());
+  await seedResult(gameId, 'T01', 'PLAYING');
+
+  // Start a GREEN->RED countdown, then end the round mid-countdown.
+  await postTransition('admin', 'RED');
+  let { data: stateData } = await getState('team');
+  assert.ok(stateData.state.transition, 'expected a pending transition');
+
+  const [participantSocket] = await Promise.all([connectSocket('participant')]);
+  try {
+    const statePromise = once(participantSocket, 'rlgl:state');
+    const { status, data } = await postLifecycle('admin', 'end-round');
+    assert.equal(status, 200);
+    assert.equal(data.state.gameStatus, 'COMPLETED');
+    assert.equal(data.state.transition, null, 'end-round must clear pending transition');
+
+    const evt = await statePromise;
+    assert.equal(evt.state.gameStatus, 'COMPLETED');
+
+    // A violation after end-round is a no-op (GAME_NOT_ACTIVE) — typing during
+    // ENDED must never disqualify anyone.
+    const v = await postViolation('team');
+    assert.equal(v.data.ok, false);
+    assert.equal(v.data.reason, 'GAME_NOT_ACTIVE');
+
+    // A submit after end-round is rejected.
+    const s = await postSubmit('team', PROBLEM.starterCode);
+    assert.equal(s.status, 409);
+    assert.equal(s.data.error.code, 'GAME_NOT_ACTIVE');
+  } finally {
+    participantSocket.disconnect();
+  }
+});
+
+test('GET /state includes the caller team\'s own result row (refresh restore)', async () => {
+  const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
+  await seedResult(gameId, 'T01', 'DISQUALIFIED');
+
+  const { status, data } = await getState('team');
+  assert.equal(status, 200);
+  assert.equal(data.result.status, 'DISQUALIFIED');
+  assert.equal(String(data.result.team_id), 'T01');
+
+  // ADMIN has no team — no result field.
+  const adminState = await getState('admin');
+  assert.equal(adminState.data.result, undefined);
+});
+
+test('GET /games/:id/results enriches rows with team_name for the admin roster', async () => {
+  const gameId = await seedRlgl(makeConfig());
+  await seedResult(gameId, 'T01', 'PLAYING');
+  await seedResult(gameId, 'T02', 'DISQUALIFIED');
+
+  const res = await fetch(`${baseUrl}/games/${gameId}/results`, {
+    headers: auth(signToken(FIXTURES['admin'])),
+  });
+  const { results } = await res.json();
+  assert.equal(res.status, 200);
+  const byTeam = Object.fromEntries(results.map((r) => [r.team_id, r]));
+  assert.equal(byTeam['T01'].team_name, 'Test Team');
+  assert.equal(byTeam['T01'].status, 'PLAYING');
+  assert.equal(byTeam['T02'].team_name, 'Second Team');
+  assert.equal(byTeam['T02'].status, 'DISQUALIFIED');
+});
+
+test('disqualify-all only touches the RLGL game rows', async () => {
+  const rlglGameId = await seedRlgl(makeConfig());
+  await seedResult(rlglGameId, 'T01', 'PLAYING');
+  await seedResult(rlglGameId, 'T02', 'QUALIFIED');
+
+  // A separate (non-RLGL) game with a PLAYING result must be left untouched.
+  const { rows: otherGame } = await pool.query(
+    `INSERT INTO games (name, description, status, route) VALUES ('Other', null, 'LIVE', 'other')
+     RETURNING game_id`
+  );
+  await seedResult(otherGame[0].game_id, 'T01', 'PLAYING');
+
+  const { status, data } = await fetch(`${baseUrl}/games/rlgl/disqualify-all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth(signToken(FIXTURES['admin'])) },
+  }).then(async (r) => ({ status: r.status, data: await r.json() }));
+  assert.equal(status, 200);
+  assert.equal(data.disqualifiedCount, 2);
+
+  const rlglRows = await pool.query(
+    'SELECT team_id, status FROM game_results WHERE game_id = $1 ORDER BY team_id',
+    [rlglGameId]
+  );
+  assert.deepEqual(
+    rlglRows.rows.map((r) => r.status),
+    ['DISQUALIFIED', 'DISQUALIFIED']
+  );
+
+  const otherRows = await pool.query(
+    'SELECT status FROM game_results WHERE game_id = $1 AND team_id = $2',
+    [otherGame[0].game_id, 'T01']
+  );
+  assert.equal(otherRows.rows[0].status, 'PLAYING');
 });

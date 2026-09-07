@@ -88,10 +88,13 @@ export async function verifyFoodToken(token) {
       throw ApiError.conflict('This food token has expired', 'TOKEN_EXPIRED');
     }
     if (access.expires_at && new Date(access.expires_at) < new Date()) {
+      // Persist the EXPIRED status (commit) BEFORE rejecting — the caller must
+      // see the token marked expired, not still UNUSED after a rollback.
       await client.query(
         `UPDATE food_access SET status = 'EXPIRED', updated_at = now() WHERE food_access_id = $1`,
         [access.food_access_id]
       );
+      await client.query('COMMIT');
       throw ApiError.conflict('This food token has expired', 'TOKEN_EXPIRED');
     }
 
