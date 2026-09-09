@@ -1,4 +1,3 @@
-import React from 'react';
 import { Users, QrCode, Utensils, HelpCircle } from 'lucide-react';
 
 function scrollToId(id) {

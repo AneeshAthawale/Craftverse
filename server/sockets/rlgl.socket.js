@@ -3,10 +3,12 @@
  *
  * Inbound (client → server):
  *   'rlgl:transition' { to: 'GREEN'|'RED' }   — ADMIN/DEV only (role from JWT)
- *   'rlgl:violation'  {}                       — TEAM/PARTICIPANT only (team
- *                                                from JWT); server validates the
- *                                                current light is RED and
- *                                                disqualifies the team
+ *   'rlgl:violation'  {}                       — PARTICIPANT only (team from
+ *                                                JWT); the participant's team
+ *                                                must be verified (checked in),
+ *                                                and the server validates the
+ *                                                current light is RED before
+ *                                                disqualifying the team
  *
  * Outbound (server → clients):
  *   'rlgl:state'   { gameId, state }           — broadcast to everyone (all room)
@@ -18,6 +20,7 @@
  * UI can disable its button.
  */
 import { scheduleTransition, reportRedLightViolation } from '../services/rlgl.service.js';
+import { assertTeamVerified } from '../services/registration.service.js';
 import { SOCKET_EVENTS } from './index.js';
 
 /**
@@ -54,13 +57,14 @@ export function registerRlglSockets(io) {
     });
 
     // Player violation: typing while the authoritative light is RED. The team
-    // comes from the verified JWT; the service validates the current light and
-    // disqualifies the team. The disqualification is broadcast to the team room
+    // comes from the verified JWT; the participant's team must be verified
+    // (checked in) and the service validates the current light before
+    // disqualifying. The disqualification is broadcast to the team room
     // (rlgl:result + game:updated) so the player page and admin roster update.
     socket.on('rlgl:violation', async (payload, ack) => {
       const respond = typeof ack === 'function' ? ack : () => {};
       try {
-        if (!socket.user || !['TEAM', 'PARTICIPANT'].includes(socket.user.role)) {
+        if (!socket.user || socket.user.role !== 'PARTICIPANT') {
           respond({ ok: false, reason: 'FORBIDDEN' });
           return;
         }
@@ -68,6 +72,7 @@ export function registerRlglSockets(io) {
           respond({ ok: false, reason: 'NO_TEAM' });
           return;
         }
+        await assertTeamVerified(socket.user.team_id);
         const outcome = await reportRedLightViolation(socket.user.team_id);
         respond({ ok: outcome.ok, reason: outcome.reason ?? null, result: outcome.result ?? null });
       } catch (err) {

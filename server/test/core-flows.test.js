@@ -17,6 +17,7 @@ import jwt from 'jsonwebtoken';
 import {
   resetSchema,
   seedUsers,
+  setTeamRegistered,
   signToken,
   FIXTURES,
   createApp,
@@ -35,11 +36,10 @@ async function seedLoginUsers() {
     bcrypt.hash('team123', 4),
     bcrypt.hash('dev123', 4),
   ]);
-  // T01 team + participants exist from seedUsers (with 'unused-test-hash'); we
+  // T01 participant exists from seedUsers (with 'unused-test-hash'); we
   // re-point the passwords so the real login path can authenticate.
   await pool.query(
-    `UPDATE users SET password_hash = $1 WHERE email IN
-       ('t01@test.local', 'p001@test.local')`,
+    `UPDATE users SET password_hash = $1 WHERE email = 'p001@test.local'`,
     [teamHash]
   );
   await pool.query(
@@ -113,16 +113,11 @@ after(async () => {
 beforeEach(async () => {
   await resetSchema();
   await seedUsers();
-  // A second team (T02) + users so ownership tests can distinguish teams.
+  // A second team (T02) + participant so ownership tests can distinguish teams.
   await pool.query(
     `INSERT INTO teams (team_id, team_name, registration_token, registration_status)
      VALUES ('T02', 'Second Team', 'cv-reg-test-token-2', 'REGISTERED')
      ON CONFLICT (team_id) DO NOTHING`
-  );
-  await pool.query(
-    `INSERT INTO users (user_id, email, password_hash, role, team_id)
-     VALUES (5, 't02@test.local', 'unused-test-hash', 'TEAM', 'T02')
-     ON CONFLICT (user_id) DO NOTHING`
   );
   await pool.query(
     `INSERT INTO participants (participant_id, name, email, team_id)
@@ -143,7 +138,6 @@ test('POST /auth/login succeeds for every role with correct credentials', async 
   const cases = [
     ['admin@test.local', 'dev123', 'ADMIN'],
     ['dev@test.local', 'dev123', 'DEV'],
-    ['t01@test.local', 'team123', 'TEAM'],
     ['p001@test.local', 'team123', 'PARTICIPANT'],
   ];
   for (const [email, password, role] of cases) {
@@ -216,7 +210,7 @@ test('registration: ADMIN verifies a team -> REGISTERED, single-use, broadcast',
      ON CONFLICT (team_id) DO NOTHING`
   );
 
-  const [teamSocket] = await Promise.all([connectSocketAs(FIXTURES.team)]);
+  const [teamSocket] = await Promise.all([connectSocketAs(FIXTURES.participant)]);
   try {
     const broadcastPromise = once(teamSocket, 'registration:completed');
     const { status, data } = await api(signToken(FIXTURES.admin), 'POST', '/registration/verify', {
@@ -252,26 +246,26 @@ test('registration: verify is single-use — a second scan returns 409', async (
   assert.equal(second.data.error.code, 'ALREADY_REGISTERED');
 });
 
-test('registration: PARTICIPANT/TEAM cannot verify (403)', async () => {
+test('registration: PARTICIPANT cannot verify (403)', async () => {
   await pool.query(
     `INSERT INTO registration (team_id, token, status)
      VALUES ('T01', 'cv-reg-test-token', 'UNREGISTERED')
      ON CONFLICT (team_id) DO NOTHING`
   );
-  for (const user of [FIXTURES.participant, FIXTURES.team]) {
-    const { status } = await api(signToken(user), 'POST', '/registration/verify', { token: 'cv-reg-test-token' });
-    assert.equal(status, 403);
-  }
+  const { status } = await api(signToken(FIXTURES.participant), 'POST', '/registration/verify', { token: 'cv-reg-test-token' });
+  assert.equal(status, 403);
 });
 
 // ------------------------------------------------ FOOD ----------------------
 
-test('food: GET /food/me returns 403 for a user with no participant link', async () => {
-  const { status } = await api(signToken(FIXTURES.team), 'GET', '/food/me');
+test('food: GET /food/me returns 403 for a non-participant (staff) user', async () => {
+  const { status } = await api(signToken(FIXTURES.dev), 'GET', '/food/me');
   assert.equal(status, 403);
 });
 
-test('food: a participant gets a backend-generated UNUSED token for the active meal (or null)', async () => {
+test('food: a participant of a VERIFIED team gets a backend-generated UNUSED token for the active meal (or null)', async () => {
+  // Event-day features require the team to be checked in first.
+  await setTeamRegistered('T01');
   const { status, data } = await api(signToken(FIXTURES.participant), 'GET', '/food/me');
   assert.equal(status, 200);
   if (data.access) {
@@ -320,15 +314,13 @@ test('food: an unknown token -> 404 INVALID_TOKEN', async () => {
   assert.equal(data.error.code, 'INVALID_TOKEN');
 });
 
-test('food: PARTICIPANT/TEAM cannot verify tokens (403)', async () => {
+test('food: PARTICIPANT cannot verify tokens (403)', async () => {
   await pool.query(
     `INSERT INTO food_access (participant_id, meal_type, event_day, token)
      VALUES (1, 'LUNCH', 1, 'cv-food-test-token-2')`
   );
-  for (const user of [FIXTURES.participant, FIXTURES.team]) {
-    const { status } = await api(signToken(user), 'POST', '/food/verify', { token: 'cv-food-test-token-2' });
-    assert.equal(status, 403);
-  }
+  const { status } = await api(signToken(FIXTURES.participant), 'POST', '/food/verify', { token: 'cv-food-test-token-2' });
+  assert.equal(status, 403);
 });
 
 test('food: a used token is never re-verifiable even by another role', async () => {
@@ -367,15 +359,13 @@ test('notifications: ADMIN creates + broadcasts notification:new; list returns i
   }
 });
 
-test('notifications: PARTICIPANT/TEAM cannot create (403); invalid type rejected (400)', async () => {
-  for (const user of [FIXTURES.participant, FIXTURES.team]) {
-    const { status } = await api(signToken(user), 'POST', '/notifications', {
-      type: 'NORMAL',
-      title: 'x',
-      message: 'y',
-    });
-    assert.equal(status, 403);
-  }
+test('notifications: PARTICIPANT cannot create (403); invalid type rejected (400)', async () => {
+  const { status } = await api(signToken(FIXTURES.participant), 'POST', '/notifications', {
+    type: 'NORMAL',
+    title: 'x',
+    message: 'y',
+  });
+  assert.equal(status, 403);
   const invalid = await api(signToken(FIXTURES.admin), 'POST', '/notifications', {
     type: 'LOUD',
     title: 'x',

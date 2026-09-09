@@ -15,14 +15,16 @@ export default function UserInfoCard({ profile }) {
   const name = member?.name ?? (authUser.email ? authUser.email.split('@')[0] : '—');
 
   const regStatus = team.registration_status;
-  // Only a backend-confirmed REGISTERED/UNREGISTERED renders a chip; anything
-  // missing/unknown must never claim the team is Registered.
+  // Only a backend-confirmed status renders a chip; anything missing/unknown
+  // must never claim the team is checked in.
   const status =
     regStatus === 'REGISTERED'
-      ? 'Registered'
-      : regStatus === 'UNREGISTERED'
-        ? 'Pending Registration'
-        : null;
+      ? 'Checked in'
+      : regStatus === 'SUBMITTED'
+        ? 'Submitted — awaiting check-in'
+        : regStatus === 'UNREGISTERED'
+          ? 'Pending registration'
+          : null;
 
   return (
     <section className="dashboard-section">
@@ -55,7 +57,7 @@ export default function UserInfoCard({ profile }) {
         <div className="user-info-row">
           <span className="user-info-label">Status</span>
           {status ? (
-            <span className={`status-registered ${regStatus === 'UNREGISTERED' ? 'status-pending' : ''}`}>
+            <span className={`status-registered ${regStatus !== 'REGISTERED' ? 'status-pending' : ''}`}>
               {status}
             </span>
           ) : (

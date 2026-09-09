@@ -222,6 +222,17 @@ code {
   color: #e11d48;
 }
 
+.login-alt {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text);
+  text-align: center;
+}
+
+.login-alt a {
+  color: var(--accent);
+}
+
 .dash-loading,
 .dash-error {
   padding: 16px;

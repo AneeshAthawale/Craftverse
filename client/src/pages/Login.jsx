@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/useAuth.js';
 
 export default function LoginPage() {
@@ -19,11 +19,7 @@ export default function LoginPage() {
     try {
       const user = await login(email.trim(), password);
       const dest =
-        user.role === 'ADMIN' || user.role === 'DEV'
-          ? '/admin'
-          : user.role === 'TEAM'
-            ? '/team'
-            : '/'; // PARTICIPANT
+        user.role === 'ADMIN' || user.role === 'DEV' ? '/admin' : '/'; // PARTICIPANT
       navigate(dest, { replace: true });
     } catch (err) {
       setError(err.message || 'Login failed');
@@ -74,6 +70,9 @@ export default function LoginPage() {
         <button className="login-btn" type="submit" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign In'}
         </button>
+        <p className="login-alt">
+          New team? <Link to="/register">Register here</Link>
+        </p>
       </form>
     </div>
   );

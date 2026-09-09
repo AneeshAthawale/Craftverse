@@ -278,6 +278,11 @@
 .status-chip.completed { color: var(--text); border-color: var(--border); }
 .status-chip.locked { color: var(--text); border-color: var(--border); }
 
+.admin-team-leader-email {
+  font-size: 12px;
+  color: var(--text);
+}
+
 .admin-games-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

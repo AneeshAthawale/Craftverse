@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { requireRole } from '../middleware/authorize.js';
+import { requireVerifiedTeam } from '../middleware/registration.js';
 import * as rlglController from '../controllers/rlgl.controller.js';
 
 const router = Router();
@@ -17,11 +18,24 @@ router.post('/reinstate/:teamId', requireAuth, requireRole('DEV', 'ADMIN'), rlgl
 router.post('/start-round', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postStartRound);
 router.post('/end-round', requireAuth, requireRole('DEV', 'ADMIN'), rlglController.postEndRound);
 
-// Teams submit their own code (team identity comes from the JWT).
-router.post('/submit', requireAuth, requireRole('TEAM', 'PARTICIPANT'), rlglController.postSubmit);
+// Verified-team participants submit their own code (team identity from JWT).
+router.post(
+  '/submit',
+  requireAuth,
+  requireRole('PARTICIPANT'),
+  requireVerifiedTeam,
+  rlglController.postSubmit
+);
 
-// Teams report a RED-light typing violation (REST fallback for the socket
-// rlgl:violation event; server validates the current light before disqualifying).
-router.post('/violation', requireAuth, requireRole('TEAM', 'PARTICIPANT'), rlglController.postViolation);
+// Verified-team participants report a RED-light typing violation (REST fallback
+// for the socket rlgl:violation event; server validates the current light
+// before disqualifying).
+router.post(
+  '/violation',
+  requireAuth,
+  requireRole('PARTICIPANT'),
+  requireVerifiedTeam,
+  rlglController.postViolation
+);
 
 export default router;

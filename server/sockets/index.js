@@ -10,8 +10,8 @@ import { bindRlglIo } from '../services/rlgl.service.js';
  * - Auth: JWT via handshake.auth.token; unauthenticated sockets are rejected.
  * - Rooms:
  *     all                      every authenticated client
- *     role:<ROLE>              DEV / ADMIN / TEAM / PARTICIPANT
- *     team:<team_id>           team members + that team's TEAM user
+ *     role:<ROLE>              DEV / ADMIN / PARTICIPANT
+ *     team:<team_id>           every member of a team (participants)
  *     admin                    ADMIN + DEV
  * - Event names are the single source of truth for real-time updates.
  */

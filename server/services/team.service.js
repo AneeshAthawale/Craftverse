@@ -6,7 +6,20 @@ const SELECT_TEAM = `
   FROM teams`;
 
 export async function listTeams() {
-  const { rows } = await query(`${SELECT_TEAM} ORDER BY team_id`);
+  // Admin listing: include the team leader (is_leader participant) and member
+  // count so staff can review submissions without a per-team round trip.
+  const { rows } = await query(
+    `SELECT t.team_id, t.team_name, t.registration_status, t.registered_at,
+            t.created_at, t.updated_at,
+            (SELECT p.name FROM participants p
+             WHERE p.team_id = t.team_id AND p.is_leader LIMIT 1) AS leader_name,
+            (SELECT p.email FROM participants p
+             WHERE p.team_id = t.team_id AND p.is_leader LIMIT 1) AS leader_email,
+            (SELECT count(*)::int FROM participants p
+             WHERE p.team_id = t.team_id) AS participant_count
+     FROM teams t
+     ORDER BY t.team_id`
+  );
   return rows;
 }
 
@@ -19,7 +32,7 @@ export async function getTeamById(teamId) {
 /** Members of a team (participants). */
 export async function getTeamParticipants(teamId) {
   const { rows } = await query(
-    `SELECT participant_id, name, email, phone, team_id, created_at
+    `SELECT participant_id, name, email, phone, team_id, is_leader, created_at
      FROM participants WHERE team_id = $1 ORDER BY participant_id`,
     [teamId]
   );

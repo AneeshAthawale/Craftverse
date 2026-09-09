@@ -5,7 +5,7 @@ import * as gameResultsController from '../controllers/gameResults.controller.js
 
 const router = Router();
 
-router.get('/:id/results', requireAuth, requireRole('DEV', 'ADMIN', 'TEAM'), gameResultsController.getResults);
+router.get('/:id/results', requireAuth, requireRole('DEV', 'ADMIN'), gameResultsController.getResults);
 router.post('/:id/results', requireAuth, requireRole('DEV', 'ADMIN'), gameResultsController.upsertResult);
 router.delete('/:id/results/:team_id', requireAuth, requireRole('DEV', 'ADMIN'), gameResultsController.deleteResult);
 

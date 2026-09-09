@@ -4,7 +4,7 @@
  * Routes (all mounted under /api/games/rlgl, authenticated):
  *   GET  /state         any authenticated user
  *   POST /transition    ADMIN/DEV — schedule a light change (server countdown)
- *   POST /submit        TEAM/PARTICIPANT — submit code for the round problem
+ *   POST /submit        PARTICIPANT — submit code for the round problem
  *   POST /disqualify/:teamId  ADMIN/DEV
  *   POST /disqualify-all      ADMIN/DEV
  *   POST /reinstate/:teamId   ADMIN/DEV (undo a mistaken disqualification)

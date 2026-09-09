@@ -11,11 +11,8 @@ export const listTeams = asyncHandler(async (req, res) => {
 export const getTeam = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // TEAM/PARTICIPANT users may only view their own team.
-  if (
-    (req.user.role === 'TEAM' || req.user.role === 'PARTICIPANT') &&
-    req.user.team_id !== id
-  ) {
+  // PARTICIPANT users may only view their own team.
+  if (req.user.role === 'PARTICIPANT' && req.user.team_id !== id) {
     throw ApiError.forbidden('You can only view your own team');
   }
 
@@ -27,9 +24,14 @@ export const getTeam = asyncHandler(async (req, res) => {
 export const getTeamQr = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // TEAM-role users may only fetch their own team's registration QR.
-  if (req.user.role === 'TEAM' && req.user.team_id !== id) {
-    throw ApiError.forbidden('You can only view your own team QR');
+  // The Registration QR is a TEAM-level credential: every participant of the
+  // team may present it at check-in. is_leader only designates who the team
+  // leader is for contact purposes — it never gates QR access. ADMIN/DEV may
+  // fetch any team's QR.
+  if (req.user.role === 'PARTICIPANT') {
+    if (req.user.team_id !== id || !req.user.participant_id) {
+      throw ApiError.forbidden('You can only view your own team QR');
+    }
   }
 
   const team = await teamService.getTeamById(id);
@@ -49,11 +51,8 @@ export const getTeamQr = asyncHandler(async (req, res) => {
 export const getTeamResults = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // TEAM/PARTICIPANT users may only view their own team's results.
-  if (
-    (req.user.role === 'TEAM' || req.user.role === 'PARTICIPANT') &&
-    req.user.team_id !== id
-  ) {
+  // PARTICIPANT users may only view their own team's results.
+  if (req.user.role === 'PARTICIPANT' && req.user.team_id !== id) {
     throw ApiError.forbidden('You can only view your own team results');
   }
 

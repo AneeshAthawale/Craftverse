@@ -1,12 +1,11 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
-import TeamDashboard from './pages/TeamDashboard';
 import RLGL from './pages/RLGL';
 import Admin from './pages/Admin';
 import RLGLControlPanel from './pages/RLGLControlPanel';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import RequireAuth from './components/RequireAuth';
-import RequireTeam from './components/RequireTeam';
 import { useAuth } from './context/useAuth.js';
 
 /** UX-only guard: admin pages are for ADMIN/DEV. Backend enforces for real. */
@@ -25,21 +24,12 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route
           path="/"
           element={
             <RequireAuth>
               <Dashboard />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/team"
-          element={
-            <RequireAuth>
-              <RequireTeam>
-                <TeamDashboard />
-              </RequireTeam>
             </RequireAuth>
           }
         />

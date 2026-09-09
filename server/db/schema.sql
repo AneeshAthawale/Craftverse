@@ -6,16 +6,22 @@
 
 -- ---------------------------------------------------------------------------
 -- teams
--- team_id is the permanent organizer-assigned identifier (e.g. 'T01').
+-- team_id is the permanent identifier (e.g. 'T01'). Teams created through the
+-- public registration flow auto-assign the next 'T##' from teams_team_id_seq;
+-- organizer-created teams may still supply their own id.
 -- registration_token is a secure random token used for the single-use
--- Registration QR. It is NEVER sent by email.
+-- Registration QR (team-level verification; sent to the team leader).
+-- Status lifecycle: UNREGISTERED (invited/legacy) -> SUBMITTED (public form
+-- submitted) -> REGISTERED (checked in on event day via admin QR scan).
 -- ---------------------------------------------------------------------------
+CREATE SEQUENCE IF NOT EXISTS teams_team_id_seq START 1;
 CREATE TABLE IF NOT EXISTS teams (
-  team_id              TEXT PRIMARY KEY,
+  team_id              TEXT PRIMARY KEY
+                       DEFAULT ('T' || lpad(nextval('teams_team_id_seq')::text, 2, '0')),
   team_name            TEXT NOT NULL,
   registration_token   TEXT NOT NULL UNIQUE,
   registration_status  TEXT NOT NULL DEFAULT 'UNREGISTERED'
-                       CHECK (registration_status IN ('UNREGISTERED', 'REGISTERED')),
+                       CHECK (registration_status IN ('UNREGISTERED', 'REGISTERED', 'SUBMITTED')),
   registered_at        TIMESTAMPTZ,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -23,7 +29,9 @@ CREATE TABLE IF NOT EXISTS teams (
 
 -- ---------------------------------------------------------------------------
 -- participants
--- A participant belongs to exactly one team.
+-- A participant belongs to exactly one team. The team leader is one of the
+-- team's participants (is_leader = true, at most one per team enforced by
+-- idx_participants_one_leader_per_team).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS participants (
   participant_id  BIGSERIAL PRIMARY KEY,
@@ -31,20 +39,23 @@ CREATE TABLE IF NOT EXISTS participants (
   email           TEXT,
   phone           TEXT,
   team_id         TEXT NOT NULL REFERENCES teams(team_id),
+  is_leader       BOOLEAN NOT NULL DEFAULT false,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------------
 -- users (authentication + authorization)
--- role hierarchy: DEV > ADMIN > TEAM/PARTICIPANT
+-- role hierarchy: DEV > ADMIN > PARTICIPANT.
+-- There is no TEAM login role: teams are a database/domain entity represented
+-- through the participants linked to them.
 -- participant_id / team_id link a user to their participant/team record.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   user_id         BIGSERIAL PRIMARY KEY,
   email           TEXT NOT NULL UNIQUE,
   password_hash   TEXT NOT NULL,
-  role            TEXT NOT NULL CHECK (role IN ('DEV', 'ADMIN', 'TEAM', 'PARTICIPANT')),
+  role            TEXT NOT NULL CHECK (role IN ('DEV', 'ADMIN', 'PARTICIPANT')),
   participant_id  BIGINT REFERENCES participants(participant_id),
   team_id         TEXT REFERENCES teams(team_id),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -53,14 +64,16 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- ---------------------------------------------------------------------------
 -- registration
--- One registration record per team; keeps QR token and status.
+-- One registration record per team; keeps the QR token and mirrors
+-- teams.registration_status (SUBMITTED once the public form is submitted,
+-- REGISTERED once the team is checked in on event day).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS registration (
   registration_id  BIGSERIAL PRIMARY KEY,
   team_id          TEXT NOT NULL UNIQUE REFERENCES teams(team_id),
   token            TEXT NOT NULL UNIQUE,
   status           TEXT NOT NULL DEFAULT 'UNREGISTERED'
-                   CHECK (status IN ('UNREGISTERED', 'REGISTERED')),
+                   CHECK (status IN ('UNREGISTERED', 'REGISTERED', 'SUBMITTED')),
   verified_at      TIMESTAMPTZ,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -181,6 +194,9 @@ ON CONFLICT (id) DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_participants_team ON participants(team_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_email ON participants(email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_one_leader_per_team ON participants(team_id) WHERE is_leader;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_team_name ON teams(team_name);
 CREATE INDEX IF NOT EXISTS idx_teams_registration_token ON teams(registration_token);
 CREATE INDEX IF NOT EXISTS idx_food_access_token ON food_access(token);
 CREATE INDEX IF NOT EXISTS idx_food_access_participant ON food_access(participant_id);
@@ -190,5 +206,55 @@ CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
 
 -- ---------------------------------------------------------------------------
 -- Idempotent additive migrations for existing dev databases.
+-- Each block must be safe to run on a fresh DB as well (it re-asserts what the
+-- CREATE TABLE blocks above already did), so `npm run db:migrate` works for
+-- both fresh installs and existing databases.
 -- ---------------------------------------------------------------------------
 ALTER TABLE food_access ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- teams_team_id_seq: create if the table predates the sequence, sync it past
+-- any existing 'T##' ids (explicit-id inserts never advance a sequence), and
+-- default new team_id values to the next 'T##'.
+CREATE SEQUENCE IF NOT EXISTS teams_team_id_seq START 1;
+ALTER TABLE teams ALTER COLUMN team_id
+  SET DEFAULT ('T' || lpad(nextval('teams_team_id_seq')::text, 2, '0'));
+SELECT setval('teams_team_id_seq',
+  COALESCE((SELECT max(substring(team_id from '^T([0-9]+)$')::int)
+            FROM teams WHERE team_id ~ '^T[0-9]+$'), 0) + 1, false);
+
+-- participants.is_leader + uniqueness guards (public registration phase).
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS is_leader BOOLEAN NOT NULL DEFAULT false;
+-- Drop + recreate so a DB that already has non-unique (mis-named) versions of
+-- these indexes converges on the unique ones even though CREATE ... IF NOT
+-- EXISTS would skip them.
+DROP INDEX IF EXISTS idx_participants_one_leader_per_team;
+CREATE UNIQUE INDEX idx_participants_one_leader_per_team
+  ON participants(team_id) WHERE is_leader;
+DROP INDEX IF EXISTS idx_participants_email;
+CREATE UNIQUE INDEX idx_participants_email
+  ON participants(email) WHERE email IS NOT NULL;
+DROP INDEX IF EXISTS idx_teams_team_name;
+CREATE UNIQUE INDEX idx_teams_team_name ON teams(team_name);
+
+-- teams.registration_status: widen the CHECK to include SUBMITTED. Normalize
+-- any legacy/experimental status values (e.g. a stray 'VERIFIED' from an older
+-- attempt) to the terminal REGISTERED state before re-asserting the CHECK.
+UPDATE teams SET registration_status = 'REGISTERED', registered_at = COALESCE(registered_at, now())
+ WHERE registration_status NOT IN ('UNREGISTERED', 'REGISTERED', 'SUBMITTED');
+UPDATE registration SET status = 'REGISTERED', verified_at = COALESCE(verified_at, now())
+ WHERE status NOT IN ('UNREGISTERED', 'REGISTERED', 'SUBMITTED');
+ALTER TABLE teams DROP CONSTRAINT IF EXISTS teams_registration_status_check;
+ALTER TABLE teams ADD CONSTRAINT teams_registration_status_check
+  CHECK (registration_status IN ('UNREGISTERED', 'REGISTERED', 'SUBMITTED'));
+
+-- registration.status: widen the CHECK to include SUBMITTED.
+ALTER TABLE registration DROP CONSTRAINT IF EXISTS registration_status_check;
+ALTER TABLE registration ADD CONSTRAINT registration_status_check
+  CHECK (status IN ('UNREGISTERED', 'REGISTERED', 'SUBMITTED'));
+
+-- users.role: remove the obsolete TEAM login role (constraint name is
+-- deterministic for inline CHECKs, so DROP + ADD keeps existing DBs in sync).
+DELETE FROM users WHERE role = 'TEAM';
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check
+  CHECK (role IN ('DEV', 'ADMIN', 'PARTICIPANT'));

@@ -13,7 +13,7 @@ export const listInquiries = asyncHandler(async (req, res) => {
   res.json({ inquiries });
 });
 
-/** PARTICIPANT/TEAM: list the caller's own inquiries only. */
+/** PARTICIPANT: list the caller's own inquiries only. */
 export const listMyInquiries = asyncHandler(async (req, res) => {
   const inquiries = await inquiryService.listMyInquiries({
     participant_id: req.user.participant_id ?? null,

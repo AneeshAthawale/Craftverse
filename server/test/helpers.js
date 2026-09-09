@@ -73,7 +73,6 @@ export function signToken(user) {
 export const FIXTURES = {
   admin: { user_id: 1, email: 'admin@test.local', role: 'ADMIN', team_id: null, participant_id: null },
   dev: { user_id: 2, email: 'dev@test.local', role: 'DEV', team_id: null, participant_id: null },
-  team: { user_id: 3, email: 't01@test.local', role: 'TEAM', team_id: 'T01', participant_id: null },
   participant: { user_id: 4, email: 'p001@test.local', role: 'PARTICIPANT', team_id: 'T01', participant_id: 1 },
 };
 
@@ -97,6 +96,47 @@ export async function seedUsers() {
       [u.user_id, u.email, u.role, u.participant_id ?? null, u.team_id ?? null]
     );
   }
+  // Explicit team_id inserts never advance teams_team_id_seq, and explicit
+  // participant/user ids never advance their BIGSERIAL sequences — point every
+  // one past the max so default-value inserts (public registration) work.
+  await syncTeamIdSequence();
+  await pool.query(
+    `SELECT setval(pg_get_serial_sequence('participants', 'participant_id'),
+       COALESCE((SELECT max(participant_id) FROM participants), 0) + 1, false)`
+  );
+  await pool.query(
+    `SELECT setval(pg_get_serial_sequence('users', 'user_id'),
+       COALESCE((SELECT max(user_id) FROM users), 0) + 1, false)`
+  );
+}
+
+/** Point teams_team_id_seq past the highest existing numeric 'T##' id. */
+export async function syncTeamIdSequence() {
+  await pool.query(
+    `SELECT setval('teams_team_id_seq',
+       COALESCE((SELECT max(substring(team_id from '^T([0-9]+)$')::int)
+                 FROM teams WHERE team_id ~ '^T[0-9]+$'), 0) + 1, false)`
+  );
+}
+
+/**
+ * Mark a team as checked in (registration_status = REGISTERED in both `teams`
+ * and the mirror `registration` row). Used by suites that need a verified team
+ * for event-day features (food, RLGL submit/violation).
+ */
+export async function setTeamRegistered(teamId) {
+  await pool.query(
+    `UPDATE teams SET registration_status = 'REGISTERED', registered_at = now(), updated_at = now()
+     WHERE team_id = $1`,
+    [teamId]
+  );
+  await pool.query(
+    `INSERT INTO registration (team_id, token, status, verified_at)
+     VALUES ($1, 'cv-reg-test-' || $1, 'REGISTERED', now())
+     ON CONFLICT (team_id) DO UPDATE SET
+       status = 'REGISTERED', verified_at = now(), updated_at = now()`,
+    [teamId]
+  );
 }
 
 export { createApp, pool, config };

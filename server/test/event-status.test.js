@@ -4,10 +4,10 @@
  * Covers (plan §13):
  *  - GET  /api/event/status (authenticated)
  *  - PATCH /api/event/status as ADMIN / DEV (200)
- *  - PATCH as TEAM / PARTICIPANT (403)
+ *  - PATCH as PARTICIPANT (403)
  *  - PATCH with invalid status (400)
  *  - DB value actually updated
- *  - Socket.IO: ADMIN change broadcasts `event:status` to participant/team/admin
+ *  - Socket.IO: ADMIN change broadcasts `event:status` to participant/admin
  *  - Socket.IO: no broadcast when the DB update fails
  */
 import { test, before, after, beforeEach } from 'node:test';
@@ -98,9 +98,9 @@ test('GET /api/event/status returns the persisted status for any role', async ()
   assert.equal(res.data.event.status, 'NOT_STARTED'); // schema default
 
   // Different authenticated role reads the same value.
-  const teamRes = await getStatus(signToken(FIXTURES.team));
-  assert.equal(teamRes.status, 200);
-  assert.equal(teamRes.data.event.status, 'NOT_STARTED');
+  const participantRes = await getStatus(signToken(FIXTURES.participant));
+  assert.equal(participantRes.status, 200);
+  assert.equal(participantRes.data.event.status, 'NOT_STARTED');
 });
 
 test('GET /api/event/status requires authentication', async () => {
@@ -126,11 +126,6 @@ test('PATCH /api/event/status as DEV succeeds', async () => {
   assert.equal(data.event.status, 'BREAK');
 });
 
-test('PATCH /api/event/status as TEAM returns 403', async () => {
-  const { status } = await patchStatus('team', { status: 'LIVE' });
-  assert.equal(status, 403);
-});
-
 test('PATCH /api/event/status as PARTICIPANT returns 403', async () => {
   const { status } = await patchStatus('participant', { status: 'LIVE' });
   assert.equal(status, 403);
@@ -153,27 +148,24 @@ test('PATCH with a missing status is rejected with 400', async () => {
 
 // ------------------------------------------------------------ Socket ----
 
-test('ADMIN status change broadcasts event:status to participant, team and admin sockets', async () => {
-  const [participantSocket, teamSocket, adminSocket] = await Promise.all([
+test('ADMIN status change broadcasts event:status to participant and admin sockets', async () => {
+  const [participantSocket, adminSocket] = await Promise.all([
     connectSocket('participant'),
-    connectSocket('team'),
     connectSocket('admin'),
   ]);
 
   try {
     const p = once(participantSocket, 'event:status');
-    const t = once(teamSocket, 'event:status');
     const a = once(adminSocket, 'event:status');
 
     const { status } = await patchStatus('admin', { status: 'LIVE' });
     assert.equal(status, 200);
 
-    const [pEvt, tEvt, aEvt] = await Promise.all([p, t, a]);
+    const [pEvt, aEvt] = await Promise.all([p, a]);
     assert.equal(pEvt.status, 'LIVE');
-    assert.equal(tEvt.status, 'LIVE');
     assert.equal(aEvt.status, 'LIVE');
   } finally {
-    [participantSocket, teamSocket, adminSocket].forEach((s) => s.disconnect());
+    [participantSocket, adminSocket].forEach((s) => s.disconnect());
   }
 });
 

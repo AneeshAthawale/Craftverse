@@ -1,0 +1,143 @@
+/* Public team registration form — functional, mirrors the login card styling. */
+.register-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.register-card {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.register-title {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-h);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.register-subtitle {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.register-section-title {
+  margin: 14px 0 2px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-h);
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.register-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.register-label {
+  font-size: 12px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.register-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-h);
+  background: var(--bg-2, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.register-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.register-error {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #e11d48;
+}
+
+.register-form-error {
+  padding: 8px 10px;
+  background: rgba(225, 29, 72, 0.08);
+  border: 1px solid rgba(225, 29, 72, 0.3);
+  border-radius: 6px;
+}
+
+.register-btn {
+  margin-top: 14px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.register-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.register-alt {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text);
+  text-align: center;
+}
+
+.register-alt a {
+  color: var(--accent);
+}
+
+.register-member-row {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.register-member-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.register-success-notes {
+  margin-top: 4px;
+}
+
+.register-success-notes p {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text);
+}

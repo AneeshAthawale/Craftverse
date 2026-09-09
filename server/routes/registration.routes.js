@@ -5,6 +5,9 @@ import * as registrationController from '../controllers/registration.controller.
 
 const router = Router();
 
+// Public team registration (no auth). The response never exposes the QR token.
+router.post('/', registrationController.registerPublic);
+
 // Anyone authenticated can look up what a registration QR contains.
 router.get('/qr/:token', requireAuth, registrationController.getByToken);
 

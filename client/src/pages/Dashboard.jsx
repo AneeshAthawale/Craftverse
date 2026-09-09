@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import QRCode from 'react-qr-code';
 import Header from '../components/dashboard/Header';
 import EventStatus from '../components/dashboard/EventStatus';
 import OngoingEvent from '../components/dashboard/OngoingEvent';
@@ -25,6 +26,19 @@ export default function Dashboard() {
   const [inquiries, setInquiries] = useState([]);
   const [socketConnected, setSocketConnected] = useState(false);
   const [error, setError] = useState('');
+  // Bumped when the team is verified (registration:completed) so all data —
+  // including the team status that gates the dashboard — reloads.
+  const [reloadKey, setReloadKey] = useState(0);
+  // The team's single Registration QR, shown to every member while not checked
+  // in (also the QR's delivery channel until email exists).
+  const [registrationQr, setRegistrationQr] = useState(null);
+
+  const teamId = user?.team_id ?? null;
+  const isParticipant = user?.role === 'PARTICIPANT';
+  const regStatus = profile?.team?.registration_status ?? null;
+  // Event-day sections stay locked until the backend says the team is checked
+  // in. Backend authorization (403s on food/RLGL) enforces this for real.
+  const teamLocked = isParticipant && !!teamId && !!regStatus && regStatus !== 'REGISTERED';
 
   const loadFood = useCallback(async () => {
     try {
@@ -61,6 +75,7 @@ export default function Dashboard() {
 
     const loadAll = async () => {
       try {
+        setRegistrationQr(null);
         // /auth/me is the one load that must succeed for the page to render.
         const me = await api.get('/auth/me');
         if (cancelled) return;
@@ -159,6 +174,14 @@ export default function Dashboard() {
       }
     });
 
+    // Team checked in on event day (admin verified the Registration QR):
+    // reload everything so the locked dashboard unlocks live.
+    const offReg = onEvent('registration:completed', (payload) => {
+      if (payload?.team?.team_id && payload.team.team_id === user?.team_id) {
+        setReloadKey((k) => k + 1);
+      }
+    });
+
     return () => {
       offStatus();
       offReconnect();
@@ -166,16 +189,119 @@ export default function Dashboard() {
       offNotif();
       offInquiry();
       offFood();
+      offReg();
     };
   }, [user, loadFood, loadEventStatus]);
 
+  // Team just verified (registration:completed): refresh the backend-derived
+  // team status (unlocks the dashboard) and the food token in one pass.
+  useEffect(() => {
+    if (!user || reloadKey === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await api.get('/auth/me');
+        if (cancelled) return;
+        if (me.user.team_id) {
+          const teamRes = await api.get(`/teams/${me.user.team_id}`);
+          if (cancelled) return;
+          setProfile({
+            user: me.user,
+            team: teamRes.team ?? null,
+            participants: teamRes.participants ?? [],
+            registration: teamRes.team ?? null,
+          });
+        }
+        loadFood();
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Could not refresh team status');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey, user, loadFood]);
+
+  // Fetch the team's single Registration QR while the team is not yet checked
+  // in — every member of the team may present it (team-level credential).
+  useEffect(() => {
+    if (!teamLocked || !teamId) return;
+    let cancelled = false;
+    api
+      .get(`/teams/${teamId}/qr`)
+      .then((data) => {
+        if (!cancelled && data.token) {
+          setRegistrationQr({ token: data.token, team_name: data.team_name });
+        }
+      })
+      .catch(() => {
+        // Non-fatal: the locked panel still explains what to do.
+        if (!cancelled) setRegistrationQr(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teamLocked, teamId]);
+
   // Show a loading state while the auth session or first data load is pending.
-  if (!profile && !error) {
+  // Participants must know their team's registration status before the
+  // dashboard decides between the locked gate and the event sections — waiting
+  // here avoids flashing unlocked content before that backend check arrives.
+  const awaitingTeamStatus = isParticipant && !!teamId && !!profile && profile.team === null && !error;
+  if ((!profile && !error) || awaitingTeamStatus) {
     return (
       <div className="dashboard-container">
         <Header user={user} socketConnected={socketConnected} onLogout={logout} />
         <main className="dashboard-main">
           <p className="dash-loading">Loading dashboard…</p>
+        </main>
+      </div>
+    );
+  }
+
+  // The team is not yet checked in: event sections (food, games, ongoing
+  // event) stay locked. Every member sees the team's single Registration QR.
+  if (teamLocked) {
+    const pending = regStatus === 'SUBMITTED';
+    return (
+      <div className="dashboard-container">
+        <Header user={user} socketConnected={socketConnected} onLogout={logout} />
+        <main className="dashboard-main">
+          {error && <p className="dash-error">⚠ {error}</p>}
+          <div className="registration-gate">
+            <h2 className="registration-gate-title">
+              {pending ? 'Registration submitted' : 'Team not checked in'}
+            </h2>
+            <p className="registration-gate-text">
+              {teamId ? (
+                <>
+                  <strong>{profile?.team?.team_name ?? teamId}</strong> ({teamId}) is{' '}
+                  {pending
+                    ? 'registered and waiting for event-day check-in.'
+                    : 'not verified yet.'}
+                </>
+              ) : (
+                'Your account is not linked to a team.'
+              )}{' '}
+              Event features unlock once the team is checked in at the venue.
+            </p>
+
+            <div className="registration-gate-qr">
+              {registrationQr?.token ? (
+                <>
+                  <div className="registration-gate-qr-code">
+                    <QRCode value={registrationQr.token} size={176} />
+                  </div>
+                  <p className="registration-gate-text">
+                    Present this team Registration QR at the check-in desk. One
+                    scan checks the whole team in.
+                  </p>
+                </>
+              ) : (
+                <p className="registration-gate-text">Loading your Registration QR…</p>
+              )}
+            </div>
+          </div>
         </main>
       </div>
     );

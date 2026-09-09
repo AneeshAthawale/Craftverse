@@ -18,7 +18,12 @@ export const getStats = asyncHandler(async (req, res) => {
     query('SELECT COUNT(*)::int AS count FROM teams'),
     query('SELECT COUNT(*)::int AS count FROM participants'),
     query(`SELECT COUNT(*)::int AS count FROM teams WHERE registration_status = 'REGISTERED'`),
-    query(`SELECT COUNT(*)::int AS count FROM teams WHERE registration_status = 'UNREGISTERED'`),
+    // Pending = submitted (public form) or pre-registration, but not yet
+    // checked in on event day.
+    query(
+      `SELECT COUNT(*)::int AS count FROM teams
+       WHERE registration_status IN ('UNREGISTERED', 'SUBMITTED')`
+    ),
     query('SELECT COUNT(*)::int AS count FROM games'),
     query(`SELECT COUNT(*)::int AS count FROM games WHERE status = 'LIVE'`),
     query(`SELECT COUNT(*)::int AS count FROM games WHERE status = 'COMPLETED'`),

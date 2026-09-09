@@ -1202,3 +1202,45 @@
   .food-qr-body { flex-direction: column; align-items: center; }
   .quick-access-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ============================================================
+   Registration gate (locked dashboard) — team not yet checked in.
+   Kept minimal and functional: panel + status copy + leader QR.
+   ============================================================ */
+.registration-gate {
+  max-width: 560px;
+  margin: 24px auto;
+  padding: 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.registration-gate-title {
+  margin: 0 0 10px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.registration-gate-text {
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.registration-gate-qr {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.registration-gate-qr-code {
+  padding: 14px;
+  background: #fff;
+  border-radius: 8px;
+}

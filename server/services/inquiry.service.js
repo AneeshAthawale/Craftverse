@@ -24,8 +24,9 @@ export async function listInquiries({ status } = {}) {
 }
 
 /**
- * A participant's own inquiries (also matches their team for TEAM-role users).
- * PARTICIPANT users are identified by participant_id; TEAM users by team_id.
+ * A participant's own inquiries (matched by participant_id; team_id scoping
+ * keeps member inquiries grouped per team).
+ * PARTICIPANT users are identified by participant_id.
  */
 export async function listMyInquiries({ participant_id, team_id }) {
   const clauses = [];

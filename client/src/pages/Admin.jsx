@@ -239,7 +239,7 @@ export default function Admin() {
   const statCards = stats
     ? [
         { label: 'Teams', value: stats.teams },
-        { label: 'Registered', value: stats.registeredTeams },
+        { label: 'Checked in', value: stats.registeredTeams },
         { label: 'Pending', value: stats.pendingTeams },
         { label: 'Participants', value: stats.participants },
         { label: 'Live Games', value: stats.liveGames },
@@ -353,6 +353,8 @@ export default function Admin() {
                 <tr>
                   <th>Team ID</th>
                   <th>Name</th>
+                  <th>Leader</th>
+                  <th>Members</th>
                   <th>Registration</th>
                 </tr>
               </thead>
@@ -362,8 +364,21 @@ export default function Admin() {
                     <td className="mono">{t.team_id}</td>
                     <td>{t.team_name}</td>
                     <td>
+                      {t.leader_name ? (
+                        <>
+                          <div>{t.leader_name}</div>
+                          <div className="mono admin-team-leader-email">{t.leader_email}</div>
+                        </>
+                      ) : (
+                        <span className="available-soon">—</span>
+                      )}
+                    </td>
+                    <td>{t.participant_count ?? 0}</td>
+                    <td>
                       <span className={`status-chip ${t.registration_status === 'REGISTERED' ? 'ok' : 'pending'}`}>
-                        {t.registration_status}
+                        {t.registration_status === 'SUBMITTED'
+                          ? 'SUBMITTED — awaiting check-in'
+                          : t.registration_status}
                       </span>
                     </td>
                   </tr>

@@ -5,7 +5,7 @@
  *  - GET /api/games/rlgl/state returns the seeded problem + light state
  *  - POST /transition schedules a pending transition (light unchanged until
  *    the deadline, then flips) — the core server-countdown requirement
- *  - POST /transition as TEAM/PARTICIPANT is 403
+ *  - POST /transition as PARTICIPANT is 403
  *  - double-click protection: second transition while pending is a no-op
  *  - refresh/join mid-countdown: GET state returns the pending transition
  *    with the same deadline (not a reset)
@@ -24,6 +24,7 @@ import { io as ioc } from 'socket.io-client';
 import {
   resetSchema,
   seedUsers,
+  setTeamRegistered,
   signToken,
   FIXTURES,
   createApp,
@@ -34,8 +35,8 @@ let server;
 let httpOrigin;
 let baseUrl;
 
-/** A second team with a seeded user so we can exercise per-team results. */
-const TEAM2 = { user_id: 5, email: 't02@test.local', role: 'TEAM', team_id: 'T02', participant_id: null };
+/** A second team's PARTICIPANT so we can exercise per-team results. */
+const P2 = { user_id: 5, email: 'p002@test.local', role: 'PARTICIPANT', team_id: 'T02', participant_id: 2 };
 
 /** Shared RLGL problem + authoritative state (mirrors the dev seed). */
 const PROBLEM = {
@@ -111,6 +112,9 @@ after(async () => {
 beforeEach(async () => {
   await resetSchema();
   await seedUsers();
+  // T01's participant submits/violates in these tests, so its team must be
+  // checked in (REGISTERED) — event-day features require verification.
+  await setTeamRegistered('T01');
   // Second team so submit/result tests can target a distinct team socket.
   await pool.query(
     `INSERT INTO teams (team_id, team_name, registration_token, registration_status)
@@ -118,10 +122,15 @@ beforeEach(async () => {
      ON CONFLICT (team_id) DO NOTHING`
   );
   await pool.query(
-    `INSERT INTO users (user_id, email, password_hash, role, team_id)
-     VALUES ($1, $2, 'unused-test-hash', $3, $4)
+    `INSERT INTO participants (participant_id, name, email, team_id)
+     VALUES (2, 'Second Participant', 'p002@test.local', 'T02')
+     ON CONFLICT (participant_id) DO NOTHING`
+  );
+  await pool.query(
+    `INSERT INTO users (user_id, email, password_hash, role, participant_id, team_id)
+     VALUES ($1, $2, 'unused-test-hash', $3, $4, $5)
      ON CONFLICT (user_id) DO NOTHING`,
-    [TEAM2.user_id, TEAM2.email, TEAM2.role, TEAM2.team_id]
+    [P2.user_id, P2.email, P2.role, P2.participant_id, P2.team_id]
   );
 });
 
@@ -197,7 +206,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 test('GET /api/games/rlgl/state returns seeded problem + GREEN light for any role', async () => {
   const gameId = await seedRlgl(makeConfig());
 
-  for (const role of ['admin', 'team', 'participant']) {
+  for (const role of ['admin', 'participant']) {
     const { status, data } = await getState(role);
     assert.equal(status, 200);
     assert.equal(String(data.gameId), String(gameId));
@@ -232,20 +241,20 @@ test('ADMIN transition schedules a pending transition; light flips only after th
   assert.ok(appliesAt - t0 >= 2500 && appliesAt - t0 <= 3500, `appliesAt delta ${appliesAt - t0}`);
 
   // Immediately after scheduling, the authoritative state still says GREEN.
-  const immediate = await getState('team');
+  const immediate = await getState('participant');
   assert.equal(immediate.data.state.light, 'GREEN');
   assert.equal(immediate.data.state.transition.to, 'RED');
 
   // Wait past the deadline: the server applies RED on its own.
   await sleep(3300);
-  const after = await getState('team');
+  const after = await getState('participant');
   assert.equal(after.data.state.light, 'RED');
   assert.equal(after.data.state.transition, null);
 });
 
-test('TEAM and PARTICIPANT cannot schedule a transition (403)', async () => {
+test('PARTICIPANT cannot schedule a transition (403)', async () => {
   await seedRlgl(makeConfig());
-  for (const role of ['team', 'participant']) {
+  for (const role of ['participant']) {
     const { status } = await postTransition(role, 'RED');
     assert.equal(status, 403);
   }
@@ -265,7 +274,7 @@ test('repeated admin clicks while a transition is pending are no-ops', async () 
   assert.equal(second.data.state.transition.appliesAt, firstAppliesAt);
 
   await sleep(3300);
-  const after = await getState('team');
+  const after = await getState('participant');
   assert.equal(after.data.state.light, 'RED');
 });
 
@@ -328,14 +337,14 @@ test('a server restart mid-countdown re-arms a still-future deadline from the DB
 
   // The child's prune must NOT have applied the transition while it was still
   // in the future — it should still be pending in the DB at this moment.
-  const mid = await getState('team');
+  const mid = await getState('participant');
   assert.equal(mid.data.state.light, 'GREEN');
   assert.equal(mid.data.state.transition.to, 'RED');
 
   // Wait out the remainder: the original server's own timer OR the child's
   // re-armed timer applies RED.
   await sleep(3000);
-  const after = await getState('team');
+  const after = await getState('participant');
   assert.equal(after.data.state.light, 'RED');
   assert.equal(after.data.state.transition, null);
 
@@ -373,7 +382,7 @@ test('a pending transition whose deadline passed while the process was down is a
   const past = Date.now() - 1000;
   await seedRlglWithState({ light: 'GREEN', transition: { to: 'RED', appliesAt: past } });
 
-  const { status, data } = await getState('team');
+  const { status, data } = await getState('participant');
   assert.equal(status, 200);
   assert.equal(data.state.light, 'RED');
   assert.equal(data.state.transition, null);
@@ -390,7 +399,7 @@ test('socket: admin rlgl:transition schedules, broadcasts rlgl:state now and fli
   await seedRlgl(makeConfig());
   const [participantSocket, teamSocket, adminSocket] = await Promise.all([
     connectSocket('participant'),
-    connectSocket('team'),
+    connectSocket('participant'),
     connectSocket('admin'),
   ]);
 
@@ -467,7 +476,7 @@ test('socket: a no-op transition (pending) does not broadcast', async () => {
 
 test('socket: non-admin cannot emit rlgl:transition', async () => {
   await seedRlgl(makeConfig());
-  const [teamSocket] = await Promise.all([connectSocket('team')]);
+  const [teamSocket] = await Promise.all([connectSocket('participant')]);
   try {
     const ack = await new Promise((resolve) => {
       teamSocket.emit('rlgl:transition', { to: 'RED' }, resolve);
@@ -485,7 +494,7 @@ test('submit during RED LIGHT is allowed and can produce a WINNER (submit is a c
   const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
   await seedResult(gameId, 'T01', 'PLAYING');
 
-  const { status, data } = await postSubmit('team', PROBLEM.starterCode);
+  const { status, data } = await postSubmit('participant', PROBLEM.starterCode);
   assert.equal(status, 200);
   assert.equal(data.passed, true);
   assert.equal(data.result.status, 'WINNER');
@@ -502,7 +511,7 @@ test('a WINNER team is not disqualified by a later RED-light violation', async (
   const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
   await seedResult(gameId, 'T01', 'WINNER');
 
-  const { status, data } = await postViolation('team');
+  const { status, data } = await postViolation('participant');
   assert.equal(status, 200);
   assert.equal(data.ok, false);
   assert.equal(data.reason, 'TEAM_ALREADY_FINISHED');
@@ -518,11 +527,11 @@ test('submit with a correct solution during GREEN upserts WINNER and emits rlgl:
   const gameId = await seedRlgl(makeConfig());
   await seedResult(gameId, 'T01', 'PLAYING');
 
-  // T01's TEAM user submits; the T01 TEAM socket must receive rlgl:result.
-  const [teamSocket] = await Promise.all([connectSocket('team')]);
+  // T01's participant submits; the T01 participant socket must receive rlgl:result.
+  const [teamSocket] = await Promise.all([connectSocket('participant')]);
   try {
     const resultPromise = once(teamSocket, 'rlgl:result');
-    const { status, data } = await postSubmit('team', PROBLEM.starterCode);
+    const { status, data } = await postSubmit('participant', PROBLEM.starterCode);
 
     assert.equal(status, 200);
     assert.equal(data.passed, true);
@@ -546,7 +555,7 @@ test('submit with an incorrect solution does not change the team result', async 
   await seedResult(gameId, 'T01', 'PLAYING');
 
   const badCode = 'function reverseWords(str) {\n  return str;\n}';
-  const { status, data } = await postSubmit('team', badCode);
+  const { status, data } = await postSubmit('participant', badCode);
   assert.equal(status, 200);
   assert.equal(data.passed, false);
   assert.equal(data.result, null);
@@ -572,7 +581,7 @@ test('a disqualified team cannot submit (409)', async () => {
   const gameId = await seedRlgl(makeConfig());
   await seedResult(gameId, 'T01', 'DISQUALIFIED');
 
-  const { status, data } = await postSubmit('team', PROBLEM.starterCode);
+  const { status, data } = await postSubmit('participant', PROBLEM.starterCode);
   assert.equal(status, 409);
   assert.equal(data.error.code, 'TEAM_DISQUALIFIED');
 });
@@ -581,12 +590,12 @@ test('a team whose result is not yet present can submit and become WINNER', asyn
   // No game_results row for T02 — the submit must still work and create one.
   const gameId = await seedRlgl(makeConfig());
 
-  const [t02Socket] = await Promise.all([connectSocketAs(TEAM2)]);
+  const [t02Socket] = await Promise.all([connectSocketAs(P2)]);
   try {
     const resultPromise = once(t02Socket, 'rlgl:result');
     const res = await fetch(`${baseUrl}/games/rlgl/submit`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...auth(signToken(TEAM2)) },
+      headers: { 'Content-Type': 'application/json', ...auth(signToken(P2)) },
       body: JSON.stringify({ code: PROBLEM.starterCode }),
     });
     const data = await res.json();
@@ -610,12 +619,12 @@ test('submit during a pending countdown is judged under the CURRENT light', asyn
   await seedResult(gameId, 'T01', 'PLAYING');
   await postTransition('admin', 'RED'); // countdown running, light still GREEN
 
-  const { status, data } = await postSubmit('team', PROBLEM.starterCode);
+  const { status, data } = await postSubmit('participant', PROBLEM.starterCode);
   assert.equal(status, 200);
   assert.equal(data.passed, true);
 
   await sleep(3300);
-  const after = await getState('team');
+  const after = await getState('participant');
   assert.equal(after.data.state.light, 'RED');
 });
 
@@ -636,7 +645,7 @@ test('violation during RED disqualifies the team and emits rlgl:result to the te
   await seedResult(gameId, 'T01', 'PLAYING');
 
   const [teamSocket, adminSocket] = await Promise.all([
-    connectSocket('team'),
+    connectSocket('participant'),
     connectSocket('admin'),
   ]);
   try {
@@ -680,7 +689,7 @@ test('violation while the light is GREEN is a no-op (countdown typing is legal)'
   await seedResult(gameId, 'T01', 'PLAYING');
   await postTransition('admin', 'RED'); // 3s countdown, light still GREEN
 
-  const { status, data } = await postViolation('team');
+  const { status, data } = await postViolation('participant');
   assert.equal(status, 200);
   assert.equal(data.ok, false);
   assert.equal(data.reason, 'NOT_RED');
@@ -694,7 +703,7 @@ test('violation while the light is GREEN is a no-op (countdown typing is legal)'
 
 test('violation when the round is not ACTIVE is a no-op', async () => {
   await seedRlgl(makeConfig({ gameStatus: 'COMPLETED', light: 'RED' }));
-  const { status, data } = await postViolation('team');
+  const { status, data } = await postViolation('participant');
   assert.equal(status, 200);
   assert.equal(data.ok, false);
   assert.equal(data.reason, 'GAME_NOT_ACTIVE');
@@ -704,7 +713,7 @@ test('a second violation for an already-disqualified team is an idempotent no-op
   const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
   await seedResult(gameId, 'T01', 'DISQUALIFIED');
 
-  const { status, data } = await postViolation('team');
+  const { status, data } = await postViolation('participant');
   assert.equal(status, 200);
   assert.equal(data.ok, false);
   assert.equal(data.reason, 'ALREADY_DISQUALIFIED');
@@ -778,14 +787,14 @@ test('a refresh after WINNER + end-round + start-round returns the reset PLAYING
   await seedResult(gameId, 'T02', 'DISQUALIFIED');
 
   // Simulate: refresh DURING the completed round shows the terminal result...
-  const before = await getState('team');
+  const before = await getState('participant');
   assert.equal(before.data.result.status, 'WINNER');
 
   // ...then the admin starts a fresh round.
   await postLifecycle('admin', 'start-round');
 
   // A refresh after the restart must show PLAYING (or no row), never WINNER.
-  const after = await getState('team');
+  const after = await getState('participant');
   assert.equal(after.data.state.gameStatus, 'ACTIVE');
   assert.equal(after.data.result.status, 'PLAYING');
   assert.equal(after.data.result.score, null);
@@ -798,7 +807,7 @@ test('end-round marks COMPLETED, clears a pending transition, and stops violatio
 
   // Start a GREEN->RED countdown, then end the round mid-countdown.
   await postTransition('admin', 'RED');
-  let { data: stateData } = await getState('team');
+  let { data: stateData } = await getState('participant');
   assert.ok(stateData.state.transition, 'expected a pending transition');
 
   const [participantSocket] = await Promise.all([connectSocket('participant')]);
@@ -814,12 +823,12 @@ test('end-round marks COMPLETED, clears a pending transition, and stops violatio
 
     // A violation after end-round is a no-op (GAME_NOT_ACTIVE) — typing during
     // ENDED must never disqualify anyone.
-    const v = await postViolation('team');
+    const v = await postViolation('participant');
     assert.equal(v.data.ok, false);
     assert.equal(v.data.reason, 'GAME_NOT_ACTIVE');
 
     // A submit after end-round is rejected.
-    const s = await postSubmit('team', PROBLEM.starterCode);
+    const s = await postSubmit('participant', PROBLEM.starterCode);
     assert.equal(s.status, 409);
     assert.equal(s.data.error.code, 'GAME_NOT_ACTIVE');
   } finally {
@@ -831,7 +840,7 @@ test('GET /state includes the caller team\'s own result row (refresh restore)', 
   const gameId = await seedRlgl(makeConfig({ light: 'RED' }));
   await seedResult(gameId, 'T01', 'DISQUALIFIED');
 
-  const { status, data } = await getState('team');
+  const { status, data } = await getState('participant');
   assert.equal(status, 200);
   assert.equal(data.result.status, 'DISQUALIFIED');
   assert.equal(String(data.result.team_id), 'T01');

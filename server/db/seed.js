@@ -6,8 +6,9 @@
  *
  * This seeds:
  *  - DEV + ADMIN users
- *  - 3 teams (T01–T03) with registration tokens + TEAM users
- *  - 6 participants (P001–P006) with PARTICIPANT users
+ *  - 3 teams (T01–T03) with registration tokens
+ *  - 6 participants (P001–P006) with PARTICIPANT users (first member of each
+ *    team is marked is_leader so leader identification is testable)
  *  - 3 games (RLGL LIVE/WAITING, Game 2 UPCOMING, Game 3 LOCKED)
  *  - RLGL games.config: the shared round problem + authoritative light state
  *  - RLGL game_results seeded PLAYING for the 3 teams (round not yet started)
@@ -25,7 +26,7 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../config/db.js';
 import { randomHex } from '../utils/token.js';
 
-// Passwords: DEV + ADMIN share a dev password; TEAM + PARTICIPANT share a
+// Passwords: DEV + ADMIN share a dev password; participants share a
 // participant-facing password. Distinct hashes so each group logs in with its own.
 const hash = await bcrypt.hash('team123', 10);
 const adminHash = await bcrypt.hash('dev123', 10);
@@ -74,11 +75,11 @@ const TEAMS = [
 ];
 
 const PARTICIPANTS = [
-  { participant_id: 1, name: 'Alex Developer', email: 'alex@example.com', phone: '9000000001', team_id: 'T01' },
+  { participant_id: 1, name: 'Alex Developer', email: 'alex@example.com', phone: '9000000001', team_id: 'T01', is_leader: true },
   { participant_id: 2, name: 'Sam Tester', email: 'sam@example.com', phone: '9000000002', team_id: 'T01' },
-  { participant_id: 3, name: 'Jordan Coder', email: 'jordan@example.com', phone: '9000000003', team_id: 'T02' },
+  { participant_id: 3, name: 'Jordan Coder', email: 'jordan@example.com', phone: '9000000003', team_id: 'T02', is_leader: true },
   { participant_id: 4, name: 'Riley Hacker', email: 'riley@example.com', phone: '9000000004', team_id: 'T02' },
-  { participant_id: 5, name: 'Casey Builder', email: 'casey@example.com', phone: '9000000005', team_id: 'T03' },
+  { participant_id: 5, name: 'Casey Builder', email: 'casey@example.com', phone: '9000000005', team_id: 'T03', is_leader: true },
   { participant_id: 6, name: 'Morgan Designer', email: 'morgan@example.com', phone: '9000000006', team_id: 'T03' },
 ];
 
@@ -117,28 +118,37 @@ async function main() {
     // ---- Participants ----
     for (const p of PARTICIPANTS) {
       await client.query(
-        `INSERT INTO participants (participant_id, name, email, phone, team_id)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO participants (participant_id, name, email, phone, team_id, is_leader)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (participant_id) DO UPDATE SET
            name = EXCLUDED.name,
            email = EXCLUDED.email,
            phone = EXCLUDED.phone,
            team_id = EXCLUDED.team_id,
+           is_leader = EXCLUDED.is_leader,
            updated_at = now()`,
-        [p.participant_id, p.name, p.email, p.phone, p.team_id]
+        [p.participant_id, p.name, p.email, p.phone, p.team_id, p.is_leader ?? false]
       );
     }
 
-    // ---- Users (DEV, ADMIN, TEAM per team, PARTICIPANT per participant) ----
+    // Explicit team_id inserts never advance teams_team_id_seq, so point the
+    // sequence at the next 'T##' after the seeded teams (public registrations
+    // then auto-assign T04, T05, ...). Same for the participants BIGSERIAL
+    // (seed supplies explicit participant_ids).
+    await client.query(
+      `SELECT setval('teams_team_id_seq',
+         COALESCE((SELECT max(substring(team_id from '^T([0-9]+)$')::int)
+                   FROM teams WHERE team_id ~ '^T[0-9]+$'), 0) + 1, false)`
+    );
+    await client.query(
+      `SELECT setval(pg_get_serial_sequence('participants', 'participant_id'),
+         COALESCE((SELECT max(participant_id) FROM participants), 0) + 1, false)`
+    );
+
+    // ---- Users (DEV, ADMIN, PARTICIPANT per participant) ----
     const users = [
       { email: 'dev@craftverse.test', role: 'DEV', passwordHash: adminHash },
       { email: 'admin@craftverse.test', role: 'ADMIN', passwordHash: adminHash },
-      ...TEAMS.map((t) => ({
-        email: `${t.team_id.toLowerCase()}@craftverse.test`,
-        role: 'TEAM',
-        passwordHash: hash,
-        team_id: t.team_id,
-      })),
       ...PARTICIPANTS.map((p) => ({
         email: `p${String(p.participant_id).padStart(3, '0')}@craftverse.test`,
         role: 'PARTICIPANT',
@@ -262,11 +272,8 @@ async function main() {
   console.log('[seed] Done. Dev credentials:');
   console.log('  DEV       dev@craftverse.test   / dev123');
   console.log('  ADMIN     admin@craftverse.test / dev123');
-  for (const t of TEAMS) {
-    console.log(`  TEAM      ${t.team_id.toLowerCase()}@craftverse.test / team123  (${t.team_id})`);
-  }
   for (const p of PARTICIPANTS) {
-    console.log(`  PART      p${String(p.participant_id).padStart(3, '0')}@craftverse.test / team123  (P${String(p.participant_id).padStart(3, '0')}, ${p.team_id})`);
+    console.log(`  PART      p${String(p.participant_id).padStart(3, '0')}@craftverse.test / team123  (P${String(p.participant_id).padStart(3, '0')}, ${p.team_id}${p.is_leader ? ', leader' : ''})`);
   }
   console.log('[seed] Registration tokens:');
   const { rows: tokens } = await pool.query('SELECT team_id, registration_token FROM teams ORDER BY team_id');
