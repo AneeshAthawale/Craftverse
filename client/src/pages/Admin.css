@@ -396,3 +396,87 @@
 .admin-inquiry-response span {
   font-weight: 600;
 }
+
+/* Admin participant management panel */
+.admin-manage {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.admin-manage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.admin-manage-title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.admin-manage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.admin-manage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.admin-manage-card {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.admin-manage-card h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-h);
+}
+
+.admin-manage-label {
+  font-size: 12px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.admin-manage-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-manage-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.admin-manage-reset {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}

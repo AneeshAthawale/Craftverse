@@ -36,7 +36,16 @@ export const getTeamQr = asyncHandler(async (req, res) => {
 
   const team = await teamService.getTeamById(id);
   const { rows } = await query('SELECT token FROM registration WHERE team_id = $1', [id]);
-  const token = rows[0]?.token || team.registration_token;
+  let token = rows[0]?.token;
+  if (!token) {
+    // No mirror registration row (legacy team) — fall back to the team's own
+    // token column (SELECT_TEAM does not include registration_token).
+    const { rows: teamRows } = await query(
+      'SELECT registration_token FROM teams WHERE team_id = $1',
+      [id]
+    );
+    token = teamRows[0]?.registration_token ?? null;
+  }
 
   // The token is what gets encoded into the QR; sensitive info is not included.
   res.json({

@@ -444,15 +444,6 @@ function emitTeamResult(gameId, teamId, result) {
   });
 }
 
-/**
- * Read a team's result for the RLGL game (null when no row exists).
- * Public state for the player page / admin roster.
- */
-export async function getRlglResultForTeam(teamId) {
-  const row = await getRlglRow();
-  return getResult(row.game_id, teamId);
-}
-
 /** Admin: disqualify one team (persist, then broadcast to that team). */
 export async function disqualifyTeam(teamId) {
   const row = await getRlglRow();
@@ -714,20 +705,5 @@ export async function submitSolution({ teamId, code }) {
     results,
     result,
     state,
-  };
-}
-
-/** Team-scoped public payload for the player page: light + own result. */
-export async function getRlglPlayerState(teamId) {
-  const row = await getRlglRow();
-  const config = normalizeConfig(row.config);
-  const state = await getRlglState();
-  return {
-    gameId: String(row.game_id),
-    name: row.name,
-    countdownSeconds: config.countdownSeconds,
-    problem: config.problem ?? null,
-    state,
-    result: (await getResult(row.game_id, teamId)) ?? null,
   };
 }

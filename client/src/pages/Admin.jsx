@@ -22,6 +22,11 @@ const GAME_STATUS_META = {
   LOCKED: 'locked',
 };
 
+// Games that currently ship an admin control panel (route registered in App.jsx).
+// Add a game's route here when its control panel exists so the link stays
+// generic without pointing at a 404.
+const GAME_CONTROL_ROUTES = ['rlgl'];
+
 export default function Admin() {
   const { user, logout, socketConnected } = useAuth();
 
@@ -46,6 +51,13 @@ export default function Admin() {
 
   // Inquiry reply state: { id, status, response } | null
   const [replying, setReplying] = useState(null);
+
+  // Participant management: detail panel for one participant.
+  const [manage, setManage] = useState(null);       // participant detail object
+  const [editForm, setEditForm] = useState(null);   // { name, email, phone }
+  const [manageBusy, setManageBusy] = useState(false);
+  const [resetPw, setResetPw] = useState('');       // new password to confirm
+  const [manageMsg, setManageMsg] = useState(null); // { ok, message }
 
   // Registration verification.
   const [regToken, setRegToken] = useState('');
@@ -228,6 +240,107 @@ export default function Admin() {
     }
   };
 
+  // ---- Participant management (ADMIN/DEV) ----
+
+  /** Refresh the participant + team lists after an edit/leader change. */
+  const refreshParticipantLists = useCallback(async () => {
+    try {
+      const [p, t] = await Promise.all([api.get('/participants'), api.get('/teams')]);
+      setParticipants(p.participants);
+      setTeams(t.teams);
+    } catch (err) {
+      setError(err.message || 'Could not refresh lists');
+    }
+  }, []);
+
+  const openManage = async (p) => {
+    setManageMsg(null);
+    setResetPw('');
+    try {
+      const { participant } = await api.get(`/participants/${p.participant_id}`);
+      setManage(participant);
+      setEditForm({
+        name: participant.name,
+        email: participant.email ?? '',
+        phone: participant.phone ?? '',
+      });
+    } catch (err) {
+      setError(err.message || 'Could not load participant details');
+    }
+  };
+
+  const closeManage = () => {
+    setManage(null);
+    setEditForm(null);
+    setResetPw('');
+    setManageMsg(null);
+  };
+
+  const handleSaveParticipant = async (e) => {
+    e.preventDefault();
+    if (!manage || !editForm) return;
+    setManageBusy(true);
+    setManageMsg(null);
+    try {
+      const { participant } = await api.patch(`/participants/${manage.participant_id}`, {
+        name: editForm.name.trim(),
+        email: editForm.email.trim(),
+        phone: editForm.phone.trim() || null,
+      });
+      setManage(participant);
+      setEditForm({
+        name: participant.name,
+        email: participant.email ?? '',
+        phone: participant.phone ?? '',
+      });
+      setManageMsg({ ok: true, message: 'Participant details saved.' });
+      await refreshParticipantLists();
+    } catch (err) {
+      setManageMsg({ ok: false, message: err.message || 'Could not save participant' });
+    } finally {
+      setManageBusy(false);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    if (!manage) return;
+    if (resetPw.length < 6) {
+      setManageMsg({ ok: false, message: 'New password must be at least 6 characters.' });
+      return;
+    }
+    setManageBusy(true);
+    setManageMsg(null);
+    try {
+      const data = await api.post(`/participants/${manage.participant_id}/reset-password`, {
+        password: resetPw,
+      });
+      setResetPw('');
+      setManageMsg({ ok: true, message: data.message || 'Password updated.' });
+    } catch (err) {
+      setManageMsg({ ok: false, message: err.message || 'Could not reset password' });
+    } finally {
+      setManageBusy(false);
+    }
+  };
+
+  const handleMakeLeader = async () => {
+    if (!manage) return;
+    if (!window.confirm(`Make ${manage.name} the team leader of ${manage.team_id}?`)) return;
+    setManageBusy(true);
+    setManageMsg(null);
+    try {
+      const data = await api.post(`/participants/${manage.participant_id}/make-leader`);
+      setManage((prev) => ({ ...prev, is_leader: true }));
+      setManageMsg({ ok: true, message: data.message || 'Team leader updated.' });
+      await refreshParticipantLists();
+    } catch (err) {
+      setManageMsg({ ok: false, message: err.message || 'Could not change team leader' });
+    } finally {
+      setManageBusy(false);
+    }
+  };
+
   if (!stats && !error) {
     return (
       <div className="admin-page">
@@ -401,7 +514,11 @@ export default function Admin() {
                 <tr>
                   <th>ID</th>
                   <th>Name</th>
+                  <th>Email</th>
                   <th>Team</th>
+                  <th>Leader</th>
+                  <th>Team status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -409,11 +526,145 @@ export default function Admin() {
                   <tr key={p.participant_id}>
                     <td className="mono">P{String(p.participant_id).padStart(3, '0')}</td>
                     <td>{p.name}</td>
+                    <td className="mono">{p.email ?? '—'}</td>
                     <td className="mono">{p.team_id}</td>
+                    <td>
+                      {p.is_leader ? (
+                        <span className="status-chip ok">LEADER</span>
+                      ) : (
+                        <span className="status-chip info">member</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`status-chip ${p.registration_status === 'REGISTERED' ? 'ok' : 'pending'}`}>
+                        {p.registration_status === 'SUBMITTED'
+                          ? 'SUBMITTED — awaiting check-in'
+                          : p.registration_status}
+                      </span>
+                    </td>
+                    <td>
+                      <button type="button" className="admin-btn" onClick={() => openManage(p)}>
+                        Manage
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+
+          {manage && (
+            <div className="admin-manage">
+              <div className="admin-manage-head">
+                <h3 className="admin-manage-title">
+                  Participant P{String(manage.participant_id).padStart(3, '0')} — {manage.name}
+                </h3>
+                <button type="button" className="admin-btn" onClick={closeManage}>
+                  Close
+                </button>
+              </div>
+
+              <div className="admin-manage-meta">
+                <span className="admin-manage-meta-item">
+                  Team: <strong className="mono">{manage.team_id}</strong>
+                </span>
+                <span className="admin-manage-meta-item">
+                  Leader:{' '}
+                  {manage.is_leader ? (
+                    <span className="status-chip ok">YES</span>
+                  ) : (
+                    <span className="status-chip info">no</span>
+                  )}
+                </span>
+                <span className="admin-manage-meta-item">
+                  Team status: {manage.registration_status}
+                </span>
+              </div>
+
+              {manageMsg && (
+                <p className={manageMsg.ok ? 'admin-ok' : 'admin-err'}>
+                  {manageMsg.ok ? '✓ ' : '✗ '}
+                  {manageMsg.message}
+                </p>
+              )}
+
+              <div className="admin-manage-grid">
+                <form className="admin-manage-card" onSubmit={handleSaveParticipant}>
+                  <h4>Edit details</h4>
+                  <label className="admin-manage-label" htmlFor={`pm-name-${manage.participant_id}`}>
+                    Name
+                  </label>
+                  <input
+                    id={`pm-name-${manage.participant_id}`}
+                    className="admin-input admin-manage-input"
+                    value={editForm?.name ?? ''}
+                    onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                  />
+                  <label className="admin-manage-label" htmlFor={`pm-email-${manage.participant_id}`}>
+                    Email
+                  </label>
+                  <input
+                    id={`pm-email-${manage.participant_id}`}
+                    className="admin-input admin-manage-input"
+                    type="email"
+                    value={editForm?.email ?? ''}
+                    onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+                  />
+                  <label className="admin-manage-label" htmlFor={`pm-phone-${manage.participant_id}`}>
+                    Phone (optional)
+                  </label>
+                  <input
+                    id={`pm-phone-${manage.participant_id}`}
+                    className="admin-input admin-manage-input"
+                    value={editForm?.phone ?? ''}
+                    onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                  />
+                  <button className="admin-btn" type="submit" disabled={manageBusy}>
+                    Save details
+                  </button>
+                </form>
+
+                <div className="admin-manage-card">
+                  <h4>Team leader</h4>
+                  <p className="admin-manage-note">
+                    Every team has exactly one leader. Changing it never moves teams,
+                    accounts, Food QR or check-in state — and every member can still
+                    present the team&apos;s Registration QR.
+                  </p>
+                  <button
+                    type="button"
+                    className="admin-btn"
+                    disabled={manageBusy || manage.is_leader}
+                    onClick={handleMakeLeader}
+                  >
+                    {manage.is_leader ? 'Current team leader' : 'Make team leader'}
+                  </button>
+
+                  <h4>Reset password</h4>
+                  <p className="admin-manage-note">
+                    Sets the login password for this participant&apos;s individual account
+                    (hashed, same mechanism as registration/login).
+                  </p>
+                  <form className="admin-manage-reset" onSubmit={handleResetPassword}>
+                    <input
+                      className="admin-input admin-manage-input"
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder="New password (min 6)"
+                      value={resetPw}
+                      onChange={(e) => setResetPw(e.target.value)}
+                    />
+                    <button
+                      className="admin-btn"
+                      type="submit"
+                      disabled={manageBusy || resetPw.length < 6}
+                    >
+                      Set new password
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
           )}
         </section>
 
@@ -437,8 +688,8 @@ export default function Admin() {
                   {g.description && <p className="admin-game-desc">{g.description}</p>}
                   {g.route && <p className="mono admin-game-route">/{g.route}</p>}
                   <div className="admin-game-actions">
-                    {g.status === 'LIVE' && g.route === 'rlgl' && (
-                      <Link to="/admin/games/rlgl" className="admin-btn admin-btn-link">
+                    {g.status === 'LIVE' && GAME_CONTROL_ROUTES.includes(g.route) && (
+                      <Link to={`/admin/games/${g.route}`} className="admin-btn admin-btn-link">
                         Open Control Panel →
                       </Link>
                     )}
