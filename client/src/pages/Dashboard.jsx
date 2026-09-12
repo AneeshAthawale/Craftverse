@@ -293,8 +293,8 @@ export default function Dashboard() {
                     <QRCode value={registrationQr.token} size={176} />
                   </div>
                   <p className="registration-gate-text">
-                    Present this team Registration QR at the check-in desk. One
-                    scan checks the whole team in.
+                    Any team member can present this Registration QR at the
+                    check-in desk. One scan checks the whole team in.
                   </p>
                 </>
               ) : (

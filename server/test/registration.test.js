@@ -18,7 +18,8 @@
  *    Registration QR every participant of the team unlocks (backend-enforced)
  *  - Registration QR verify: single-use, staff-only, registration:completed
  *    broadcast to the team room
- *  - Registration QR is leader-only for PARTICIPANT users
+ *  - Registration QR is a TEAM-level credential: every member (leader or not)
+ *    can fetch it, and only same-team participants are allowed
  */
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';

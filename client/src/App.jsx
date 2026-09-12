@@ -3,6 +3,8 @@ import Dashboard from './pages/Dashboard';
 import RLGL from './pages/RLGL';
 import Admin from './pages/Admin';
 import RLGLControlPanel from './pages/RLGLControlPanel';
+import ScanRegistrationQR from './pages/ScanRegistrationQR';
+import ScanFoodQR from './pages/ScanFoodQR';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import RequireAuth from './components/RequireAuth';
@@ -57,6 +59,26 @@ function App() {
             <RequireAuth>
               <RequireAdmin>
                 <RLGLControlPanel />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/scan/registration"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <ScanRegistrationQR />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/scan/food"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <ScanFoodQR />
               </RequireAdmin>
             </RequireAuth>
           }

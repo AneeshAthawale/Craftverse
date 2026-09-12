@@ -237,8 +237,9 @@ export async function verifyRegistration(token) {
     );
 
     const { rows: teamRow } = await client.query(
-      `SELECT team_id, team_name, registration_status, registered_at
-       FROM teams WHERE team_id = $1`,
+      `SELECT t.team_id, t.team_name, t.registration_status, t.registered_at,
+              (SELECT count(*)::int FROM participants p WHERE p.team_id = t.team_id) AS member_count
+       FROM teams t WHERE t.team_id = $1`,
       [team.team_id]
     );
 

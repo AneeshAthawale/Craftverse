@@ -64,6 +64,11 @@ export default function Admin() {
   const [regResult, setRegResult] = useState(null); // { ok, message, team? }
   const [regBusy, setRegBusy] = useState(false);
 
+  // Food verification (individual meal tokens) — separate from registration.
+  const [foodToken, setFoodToken] = useState('');
+  const [foodResult, setFoodResult] = useState(null); // { ok, message }
+  const [foodBusy, setFoodBusy] = useState(false);
+
   const loadAll = useCallback(async () => {
     setError('');
     try {
@@ -197,7 +202,13 @@ export default function Admin() {
     setRegResult(null);
     try {
       const data = await api.post('/registration/verify', { token });
-      setRegResult({ ok: true, message: `Team ${data.team.team_name} (${data.team.team_id}) registered.` });
+      const members = data.team.member_count;
+      setRegResult({
+        ok: true,
+        message: `Team ${data.team.team_name} (${data.team.team_id}) checked in${
+          members != null ? ` · ${members} member${members === 1 ? '' : 's'}` : ''
+        }.`,
+      });
       setRegToken('');
       // Update UI immediately; socket event also updates other admin clients.
       setTeams((prev) =>
@@ -219,6 +230,27 @@ export default function Admin() {
       setRegResult({ ok: false, message: err.message || 'Verification failed' });
     } finally {
       setRegBusy(false);
+    }
+  };
+
+  const handleVerifyFood = async (e) => {
+    e.preventDefault();
+    const token = foodToken.trim();
+    if (!token) return;
+    setFoodBusy(true);
+    setFoodResult(null);
+    try {
+      const data = await api.post('/food/verify', { token });
+      const p = data.participant;
+      const who = p?.participant_id != null
+        ? `${p.name ?? 'Participant'} (P${String(p.participant_id).padStart(3, '0')})`
+        : (p?.name ?? 'Participant');
+      setFoodResult({ ok: true, message: `${who} · ${data.mealLabel} · USED` });
+      setFoodToken('');
+    } catch (err) {
+      setFoodResult({ ok: false, message: err.message || 'Verification failed' });
+    } finally {
+      setFoodBusy(false);
     }
   };
 
@@ -431,8 +463,12 @@ export default function Admin() {
         <section className="admin-section">
           <h2 className="admin-section-title">Registration Verification</h2>
           <p className="admin-section-desc">
-            Scan or paste the team's Registration QR token. The backend validates it.
+            Scan the team's Registration QR with the camera, or paste the token manually.
+            One scan checks in the whole team.
           </p>
+          <Link to="/admin/scan/registration" className="admin-btn admin-btn-link">
+            Open Camera Scanner →
+          </Link>
           <form className="admin-inline-form" onSubmit={handleVerifyRegistration}>
             <input
               className="admin-input"
@@ -449,6 +485,36 @@ export default function Admin() {
             <p className={regResult.ok ? 'admin-ok' : 'admin-err'}>
               {regResult.ok ? '✓ ' : '✗ '}
               {regResult.message}
+            </p>
+          )}
+        </section>
+
+        {/* Food verification — individual meal tokens, separate from registration */}
+        <section className="admin-section">
+          <h2 className="admin-section-title">Food Verification</h2>
+          <p className="admin-section-desc">
+            Scan a participant's Food QR with the camera, or paste the token manually.
+            One scan redeems that participant's meal for the current break.
+          </p>
+          <Link to="/admin/scan/food" className="admin-btn admin-btn-link">
+            Open Food Scanner →
+          </Link>
+          <form className="admin-inline-form" onSubmit={handleVerifyFood}>
+            <input
+              className="admin-input"
+              type="text"
+              placeholder="cv-food-…"
+              value={foodToken}
+              onChange={(e) => setFoodToken(e.target.value)}
+            />
+            <button className="admin-btn" type="submit" disabled={foodBusy || !foodToken.trim()}>
+              {foodBusy ? 'Verifying…' : 'Verify Food'}
+            </button>
+          </form>
+          {foodResult && (
+            <p className={foodResult.ok ? 'admin-ok' : 'admin-err'}>
+              {foodResult.ok ? '✓ ' : '✗ '}
+              {foodResult.message}
             </p>
           )}
         </section>
